@@ -1,0 +1,68 @@
+#!/bin/bash
+
+die() {
+    printf '%s\n' "$*"
+    exit 1
+}
+
+usage() {
+    die 'Usage: repodiff repo1 repo2'
+}
+
+# "$1" - repo
+must_git_show_ref() {
+    out="$(git -C "$1" show-ref 2>&1)"
+    show_ref_status="${PIPESTATUS[0]}"
+    if [ "$show_ref_status" != 0 ]; then
+        printf '%s\n' "$out"
+        die "failed git " "$@" " show-ref with status $show_ref_status"
+    fi
+    printf '%s\n' "$out"
+}
+
+# "$1" - repo
+# "$2.." - args for `git symbolic-ref`
+must_git_symbolic_ref() {
+    local repo
+    repo="$1"
+    shift
+    out="$(git -C "$repo" symbolic-ref "$@" 2>&1)"
+    symbolic_ref_status="${PIPESTATUS[0]}"
+    if [ "$symbolic_ref_status" != 0 ]; then
+        printf '%s\n' "$out"
+        die "failed git " "$@" " symbolic-ref with status $symbolic_ref_status"
+    fi
+    printf '%s\n' "$out"
+}
+
+# $1 - new repo
+# $2 - orig repo
+must_be_equal() {
+    out="$(must_git_show_ref "$1" show-ref)" || die "$out"
+    dst_refs="$(printf '%s\n' "$out" | sort)"
+    out="$(must_git_show_ref "$2" show-ref)" || die "$out"
+    src_refs="$(printf '%s\n' "$out" | sort)"
+    if [ "$dst_refs" != "$src_refs" ]; then
+        printf '%s refs:\n%s\n' "$1" "$dst_refs"
+        printf '%s refs:\n%s\n' "$2" "$src_refs"
+        printf 'diffs:\n'
+        diff -u <(printf '%s\n' "$src_refs") <(printf '%s\n' "$dst_refs")
+        die "refs differ between $1 and $2"
+    fi
+    head1=$(must_git_symbolic_ref "$1")
+    head2=$(must_git_symbolic_ref "$2")
+    if [ "$head1" != "$head2" ]; then
+        printf '%s HEAD=%s\n' "$1" "$head1"
+        printf '%s HEAD=%s\n' "$2" "$head2"
+        die "HEAD differs between $1 and $2"
+    fi
+}
+
+repo1="$1"
+repo2="$2"
+
+if [ ! -d "$repo1" ] || [ ! -d "$repo2" ]; then
+    usage
+fi
+
+must_be_equal "$repo1" "$repo2"

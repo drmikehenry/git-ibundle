@@ -1,0 +1,38 @@
+#!/bin/bash
+
+test -d vim.git || git clone --mirror https://github.com/vim/vim
+
+git -C vim.git bundle create ../vim-small.bundle \
+    v7.0.001 \
+    v7.0.002 \
+    v7.0.003 \
+    v7.0.004 \
+    v7.0.005 \
+
+rm -rf vim-small.git
+mkdir vim-small.git
+git -C vim-small.git init --bare --initial-branch master
+git -C vim-small.git fetch ../vim-small.bundle '*:*'
+git -C vim-small.git reset --soft v7.0.005
+
+prev='v7.0.005'
+rm -rf "$prev".git
+cp -r vim-small.git "$prev".git
+git -C "$prev".git reset --soft "$prev"
+git -C "$prev".git gc
+
+for rev in \
+    'v7.0.004' \
+    'v7.0.003' \
+    'v7.0.002' \
+    'v7.0.001' \
+    ; do
+
+    rm -rf "$rev".git
+    cp -r "$prev".git "$rev".git
+    git -C "$rev".git tag -d "$prev"
+    git -C "$rev".git reset --soft "$rev"
+    git -C "$rev".git gc
+
+    prev="$rev"
+done
