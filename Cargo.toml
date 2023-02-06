@@ -1,7 +1,14 @@
 [package]
 name = "git-ibundle"
 version = "0.1.0"
+authors = ["Michael Henry <rust@drmikehenry.com>"]
 edition = "2021"
+description = "A tool for incremental offline mirroring of a Git repository"
+repository = "https://github.com/drmikehenry/git-ibundle/"
+license = "MIT"
+keywords = ["incremental", "offline", "mirroring", "Git", "repository"]
+categories = ["command-line-utilities"]
+exclude = ["repotests"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
