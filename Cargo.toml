@@ -1,6 +1,6 @@
 [package]
 name = "git-ibundle"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Michael Henry <rust@drmikehenry.com>"]
 edition = "2021"
 description = "A tool for incremental offline mirroring of a Git repository"
