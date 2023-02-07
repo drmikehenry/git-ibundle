@@ -8,7 +8,7 @@ repository = "https://github.com/drmikehenry/git-ibundle/"
 license = "MIT"
 keywords = ["incremental", "offline", "mirroring", "Git", "repository"]
 categories = ["command-line-utilities"]
-exclude = ["repotests"]
+exclude = ["repotests", ".cargo"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

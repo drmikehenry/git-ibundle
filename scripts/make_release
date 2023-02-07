@@ -1,0 +1,48 @@
+#!/bin/bash
+
+die() {
+    echo "error: $*"
+    exit 1
+}
+
+rm -rf target/github
+mkdir -p target/github
+
+if ! version="$(perl -ne \
+    'if (/^version\s*=\s*"([^"]+)"\s*$/) { print "$1\n"; }' \
+    Cargo.toml)"; then
+    die "Failed to get version"
+fi
+
+echo "Releasing version $version"
+
+targets=(x86_64-unknown-linux-musl x86_64-pc-windows-gnu)
+
+for target in "${targets[@]}"; do
+    echo "Building target $target"
+    cargo build --quiet --release --target "$target" ||
+        die "Failed to build for target $target"
+
+    mkdir -p "target/github/$target"
+    cp README.md LICENSE.md CHANGES.md "target/github/$target"
+    for name in git-ibundle git-ibundle.exe; do
+        exe="target/$target/release/$name"
+        if [ -f "$exe" ]; then
+            cp "$exe" "target/github/$target"
+        fi
+    done
+done
+
+target=x86_64-unknown-linux-musl
+tar -C "target/github/$target" \
+    -zcf target/github/git-ibundle-"$version-$target".tar.gz \
+    .
+
+target=x86_64-pc-windows-gnu
+
+# -j    junk paths (keep only basename)
+zip -q -j target/github/git-ibundle-"$version-$target".zip \
+    "target/github/$target"/*
+
+printf 'If all looks good, tag this release:\n\n'
+printf '  git tag -am "Release v%s." v%s\n' "$version" "$version"
