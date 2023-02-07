@@ -275,7 +275,7 @@ This converts an ibundle into a standard Git bundle.  The Git bundle will
 contain all references and prerequisite commit IDs needed to apply the bundle
 via:
 
-    git fetch <BUNDLE_FILE> --prune "*:*"
+    git fetch <BUNDLE_FILE> --force --prune "*:*"
 
 Note that Git bundles cannot represent information about symbolic changes to
 `HEAD`.  `git-ibundle to-bundle` indicates which Git operations are necessary
@@ -286,7 +286,7 @@ $ git-ibundle to-bundle ../repo1.ibundle ../repo1.bundle)
 read '../repo1.ibundle', seq_num=13, 0 refs
 wrote '../repo1.bundle', 11 refs, 5 prereqs
 To apply this bundle file in destination repository:
-  git fetch .../file.bundle --prune "*:*"
+  git fetch .../file.bundle --force --prune "*:*"
   git symbolic-ref HEAD refs/heads/main
 ```
 

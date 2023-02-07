@@ -16,8 +16,10 @@ done
 
 if $verbose; then
     Q=
+    QUIET=
 else
     Q=-q
+    QUIET=--quiet
 fi
 
 die() {
@@ -270,6 +272,26 @@ must_git_commit_file "$SRC1"
 must_git_commit_file "$SRC1"
 must_git_commit_file "$SRC1"
 must_git_commit_file "$SRC1"
+must_git_ibundle "$SRC1" create $Q "$IBU1"
+must_git_ibundle "$DST1" fetch $Q "$IBU1"
+fsck_and_diff "$DST1" "$SRC1"
+must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
+end_context
+
+set_context 'branch for HEAD, then a commit to main'
+must_git -C "$SRC1" branch $Q temp-branch HEAD
+must_git_commit_file "$SRC1"
+must_git_ibundle "$SRC1" create $Q "$IBU1"
+must_git_ibundle "$DST1" fetch $Q "$IBU1"
+fsck_and_diff "$DST1" "$SRC1"
+must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
+end_context
+
+set_context 'Remove temp-branch, squash two commits'
+must_git -C "$SRC1" branch $Q -D temp-branch
+must_git -C "$SRC1" reset $Q HEAD~2
+must_git -C "$SRC1" commit $Q -am 'Squash two commits'
+must_git -C "$SRC1" gc $QUIET --prune=now
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"

@@ -593,7 +593,8 @@ fn git_fetch_bundle(
     quiet: bool,
     dry_run: bool,
 ) -> AResult<()> {
-    let mut args: Vec<ffi::OsString> = vec!["fetch".into(), "--prune".into()];
+    let mut args: Vec<ffi::OsString> =
+        vec!["fetch".into(), "--prune".into(), "--force".into()];
     if quiet {
         args.push("-q".into())
     }
@@ -1265,7 +1266,7 @@ fn cmd_to_bundle(to_bundle_args: &ToBundleArgs) -> AResult<i32> {
             ibundle.prereqs.len(),
         );
         println!("To apply this bundle file in destination repository:");
-        println!("  git fetch .../file.bundle --prune \"*:*\"");
+        println!("  git fetch .../file.bundle --force --prune \"*:*\"");
         if ibundle.head_detached {
             println!("  git update-ref --no-deref HEAD {}", ibundle.head_ref);
         } else {
