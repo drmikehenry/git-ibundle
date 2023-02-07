@@ -1105,7 +1105,7 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
 
     if meta == basis_meta && !create_args.allow_empty {
         eprintln!(std::concat!(
-            "error: refusing to create an empty bundle; ",
+            "error: refusing to create an empty ibundle; ",
             "consider `--allow-empty`"
         ));
         return Ok(STATUS_EMPTY_BUNDLE);
