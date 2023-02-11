@@ -118,6 +118,20 @@ must_git_ibundle() {
     git_ibundle "$@" || die "failed git_ibundle " "$@"
 }
 
+must_git_ibundle_status() {
+    out="$(git_ibundle "$@" status)"
+    status="$?"
+    if [ "$status" != 0 ]; then
+        die "failed git_ibundle $* status"
+    fi
+    repo_id="$(printf '%s\n' "$out" | grep '^repo_id:')"
+    repo_id="${repo_id#*: }"
+    max_seq_num="$(printf '%s\n' "$out" | grep '^max_seq_num:')"
+    max_seq_num="${max_seq_num#*: }"
+    next_seq_num="$(printf '%s\n' "$out" | grep '^next_seq_num:')"
+    next_seq_num="${next_seq_num#*: }"
+}
+
 commit_num=0
 # $1 - repo
 must_git_commit_file() {
@@ -144,6 +158,10 @@ out=$(must_git_ibundle "$SRC1" status)
 expected_out=$'repo_id: NONE\nmax_seq_num: 0\nnext_seq_num: 1'
 test "$out" = "$expected_out" ||
     die $'status had wrong output:\n'"$out"$'\nexpected:\n'"$expected_out"
+must_git_ibundle_status "$SRC1"
+test "$repo_id" = 'NONE' || die "wrong repo_id=$repo_id"
+test "$max_seq_num" = '0' || die "wrong max_seq_num=$max_seq_num"
+test "$next_seq_num" = '1' || die "wrong next_seq_num=$next_seq_num"
 
 set_context 'ibundle the empty repo'
 must_git_ibundle "$SRC1" create $Q "$IBU1"
@@ -151,7 +169,10 @@ must_git_ibundle "$DST1" fetch $Q "$IBU1"
 must_git_fsck "$DST1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 must_git_fsck "$DST1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
+must_git_ibundle_status "$SRC1"
+src_repo_id="$repo_id"
+must_git_ibundle_status "$DST1"
+test "$repo_id" = "$src_repo_id" || die "wrong $DST1 repo_id=$repo_id"
 end_context
 
 set_context 'still empty repo'
@@ -161,7 +182,6 @@ must_git_ibundle "$DST1" fetch $Q "$IBU1"
 must_git_fsck "$DST1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 must_git_fsck "$DST1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'commits: main, branch1, tag1, atag1'
@@ -169,12 +189,11 @@ must_git_commit_file "$SRC1"
 must_git_commit_file "$SRC1"
 must_git_commit_file "$SRC1"
 must_git -C "$SRC1" branch branch1
-must_git -C "$SRC1" tag -m $'Tag 1.\n\nMore\ncomments.' tag1
+must_git -C "$SRC1" tag tag1
 must_git -C "$SRC1" tag -a -m $'Annotated Tag 1.\n\nMore\ncomments.' atag1
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'no new commits, --standalone but semantically empty'
@@ -182,7 +201,6 @@ fail_git_ibundle 3 "$SRC1" create $Q --standalone "$IBU1"
 must_git_ibundle "$SRC1" create $Q --standalone --allow-empty "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'commits, -branch1, -tag1, main2, tag2, atag2, commits'
@@ -191,24 +209,25 @@ must_git -C "$SRC1" branch $Q -D branch1
 must_git -C "$SRC1" branch main2
 must_git_commit_file "$SRC1"
 must_git_q -C "$SRC1" tag -d tag1
-must_git -C "$SRC1" tag -m $'Tag 2.\n\nMore\ncomments.' tag2
+must_git -C "$SRC1" tag tag2
 must_git -C "$SRC1" tag -a -m $'Annotated Tag 2.\n\nMore\ncomments.' atag2
 must_git_commit_file "$SRC1"
 must_git_commit_file "$SRC1"
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
+
+must_git_ibundle_status "$DST1"
+saved_basis="$max_seq_num"
+cp -a "$DST1" "$DST1-basis-$saved_basis"
 end_context
 
 set_context 'wrong repo_id'
 echo '00000000-0000-0000-0000-000000000000' >> "$DST1/ibundle/id"
 fail_git_ibundle 1 "$DST1" fetch $Q "$IBU1"
-fail_git_ibundle 1 "$DST1" to-bundle $Q "$IBU1" "$BU1"
 cp "$SRC1/.git/ibundle/id" "$DST1/ibundle/id"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'fix 1: fix1'
@@ -218,7 +237,6 @@ must_git_commit_file "$SRC1"
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'checkout main2 (same as main)'
@@ -226,7 +244,6 @@ must_git -C "$SRC1" checkout $Q main2
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'checkout main'
@@ -234,7 +251,6 @@ must_git -C "$SRC1" checkout $Q main
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'detached head (sole change)'
@@ -242,7 +258,6 @@ must_git -C "$SRC1" checkout $Q HEAD~
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'back to main (sole change)'
@@ -250,7 +265,12 @@ must_git -C "$SRC1" checkout $Q main
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
+end_context
+
+set_context 'bundle from --basis'
+must_git_ibundle "$SRC1" create $Q --basis "$saved_basis" "$IBU1"
+must_git_ibundle "$DST1-basis-$saved_basis" fetch $Q "$IBU1"
+fsck_and_diff "$DST1-basis-$saved_basis" "$SRC1"
 end_context
 
 set_context 'Restart from --basis 0'
@@ -260,11 +280,17 @@ mkdir "$DST1-from-0"
 must_git -C "$DST1-from-0" init $Q --initial-branch anything-but-main --bare
 must_git_ibundle "$DST1-from-0" fetch $Q "$IBU1"
 fsck_and_diff "$DST1-from-0" "$SRC1"
-must_git_ibundle "$DST1-from-0" to-bundle $Q "$IBU1" "$BU1"
 # Also fetch into $DST1.
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
+end_context
+
+set_context 'Restart from --basis-current'
+must_git_ibundle "$SRC1" create $Q --basis-current "$IBU1"
+rm -rf "$DST1/ibundle"
+fail_git_ibundle 1 "$DST1" fetch $Q "$IBU1"
+must_git_ibundle "$DST1" fetch $Q "$IBU1" --force
+fsck_and_diff "$DST1" "$SRC1"
 end_context
 
 set_context 'Only commits'
@@ -275,7 +301,6 @@ must_git_commit_file "$SRC1"
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'branch for HEAD, then a commit to main'
@@ -284,7 +309,6 @@ must_git_commit_file "$SRC1"
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'Remove temp-branch, squash two commits'
@@ -295,7 +319,6 @@ must_git -C "$SRC1" gc $QUIET --prune=now
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context
 
 set_context 'Add head-n tags into the past'
@@ -306,5 +329,4 @@ must_git -C "$SRC1" tag -a -m $'ahead-4.\n\nMore\ncomments.' ahead-4 HEAD~4
 must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
-must_git_ibundle "$DST1" to-bundle $Q "$IBU1" "$BU1"
 end_context

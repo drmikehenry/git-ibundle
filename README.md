@@ -182,10 +182,11 @@ Arguments:
   <IBUNDLE_FILE>  ibundle file to create
 
 Options:
-      --standalone     force ibundle to be standalone
       --basis <BASIS>  choose alternate basis sequence number
-  -q, --quiet          run quietly
+      --standalone     force ibundle to be standalone
       --allow-empty    allow creation of an empty ibundle
+      --basis-current  choose basis to be current repository state
+  -q, --quiet          run quietly
   -h, --help           Print help information
   -V, --version        Print version information
 ```
@@ -222,6 +223,23 @@ been no changes since the last ibundle was created.  In this case, an exit
 status of `3` is provided (whereas most failures result in an exit status of
 `1`).  To allow creation of an empty ibundle, use `--allow-empty`.
 
+With `--basis-current` (which implies `--standalone` and `--allow-empty`), the
+basis is set to the current repository state.  The ibundle will be logically
+empty and standalone, making it suitable for fetching into an existing
+destination repository known to match the state of the current repository.  This
+provides a way to bootstrap into the use of git-ibundle for an existing pair of
+mirrored repositories.  For example:
+
+    # On source network:
+    cd source.git
+    git-ibundle create --basis-current ../bootstrap.ibundle
+
+    # Transfer `bootstrap.ibundle` to destination network.
+
+    # On destination network:
+    cd destination.git
+    git-ibundle fetch ../bootstrap.ibundle --force
+
 ### Fetch from an ibundle
 
 ```text
@@ -254,47 +272,6 @@ to override this caution.  `--force` may be used in these cases:
   set of references and prerequisite commit IDs is within the ibundle itself, so
   the `fetch` operation is safe to attempt; forcing will not override the
   requirement that all commit IDs be present.
-
-### Convert an ibundle into a bundle
-
-```text
-Usage: git-ibundle to-bundle [OPTIONS] <IBUNDLE_FILE> <BUNDLE_FILE>
-
-Arguments:
-  <IBUNDLE_FILE>  ibundle file to convert
-  <BUNDLE_FILE>   bundle file to create from ibundle
-
-Options:
-  -q, --quiet    run quietly
-      --force    force fetch operation
-  -h, --help     Print help information
-  -V, --version  Print version information
-```
-
-This converts an ibundle into a standard Git bundle.  The Git bundle will
-contain all references and prerequisite commit IDs needed to apply the bundle
-via:
-
-    git fetch <BUNDLE_FILE> --force --prune "*:*"
-
-Note that Git bundles cannot represent information about symbolic changes to
-`HEAD`.  `git-ibundle to-bundle` indicates which Git operations are necessary
-to apply the bundle to a repository.  For example:
-
-```console
-$ git-ibundle to-bundle ../repo1.ibundle ../repo1.bundle)
-read '../repo1.ibundle', seq_num=13, 0 refs
-wrote '../repo1.bundle', 11 refs, 5 prereqs
-To apply this bundle file in destination repository:
-  git fetch .../file.bundle --force --prune "*:*"
-  git symbolic-ref HEAD refs/heads/main
-```
-
-An ibundle created with `git-ibundle create --standalone` can be converted
-without reference to a Git repository; otherwise, a repository with the proper
-repo_id and basis must be used.
-
-The `--force` switch is required in the same cases as for `git-ibundle fetch`.
 
 ### Report status
 

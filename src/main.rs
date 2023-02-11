@@ -1,8 +1,7 @@
 use std::collections;
 use std::ffi;
 use std::fs;
-use std::io;
-use std::io::Write;
+use std::io::{self, BufRead, Write};
 use std::path;
 use tempfile;
 use uuid;
@@ -20,7 +19,7 @@ const STATUS_OK: i32 = 0;
 const STATUS_ERROR: i32 = 1;
 const STATUS_EMPTY_BUNDLE: i32 = 3;
 
-const IBUNDLE_FORMAT_V1: &[u8] = b"# v1 git ibundle";
+const IBUNDLE_FORMAT_V2: &[u8] = b"# v2 git ibundle";
 const REPO_META_FORMAT_V1: &[u8] = b"# v1 repo meta";
 const GIT_BUNDLE_FORMAT_V2: &[u8] = b"# v2 git bundle";
 
@@ -75,16 +74,56 @@ fn create_writer<P: AsRef<std::path::Path>>(
     Ok(io::BufWriter::new(create_file(path)?))
 }
 
-fn read_line_bytes(
-    f: &mut impl io::BufRead,
-    line: &mut BString,
-) -> AResult<bool> {
+fn read_bytes_until<R: io::Read, F>(
+    reader: &mut io::BufReader<R>,
+    bline: &mut Vec<u8>,
+    is_terminator: F,
+) -> io::Result<usize>
+where
+    F: Fn(u8) -> bool,
+{
+    bline.clear();
+    let mut read = 0;
+    loop {
+        let done;
+        let used;
+
+        {
+            let available = match reader.fill_buf() {
+                Ok(available) => available,
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(e);
+                }
+            };
+
+            if let Some(pos) = available.iter().position(|&c| is_terminator(c))
+            {
+                done = true;
+                used = pos + 1;
+            } else {
+                done = false;
+                used = available.len();
+            }
+            bline.extend_from_slice(&available[..used]);
+        }
+        reader.consume(used);
+        read += used;
+        if done || used == 0 {
+            return Ok(read);
+        }
+    }
+}
+
+fn read_bline(f: &mut impl io::BufRead, line: &mut BString) -> AResult<usize> {
     line.clear();
     f.read_until(b'\n', line)?;
     if line.ends_with(&[b'\n']) {
         line.pop();
     }
-    Ok(line.len() > 0)
+    Ok(line.len())
 }
 
 fn bstr_pop_word<'a>(bstr: &'a BStr) -> (&'a BStr, &'a BStr) {
@@ -121,15 +160,25 @@ fn oid_to_bstring(oid: &git2::Oid) -> BString {
     oid.to_string().into()
 }
 
+fn write_oid<T: io::Write>(f: &mut T, oid: &git2::Oid) -> AResult<()> {
+    f.write_all(oid.to_string().as_bytes())?;
+    Ok(())
+}
+
+fn write_bline<T: io::Write>(f: &mut T, bstr: &BStr) -> AResult<()> {
+    f.write_all(bstr)?;
+    f.write_all(b"\n")?;
+    Ok(())
+}
+
 fn write_oid_bstr_bline<T: io::Write>(
     f: &mut T,
     oid: &git2::Oid,
     bstr: &BStr,
 ) -> AResult<()> {
-    f.write_all(oid.to_string().as_bytes())?;
+    write_oid(f, oid)?;
     f.write_all(b" ")?;
-    f.write_all(bstr)?;
-    f.write_all(b"\n")?;
+    write_bline(f, bstr)?;
     Ok(())
 }
 
@@ -163,21 +212,39 @@ struct CreateArgs {
     #[arg(value_name = "IBUNDLE_FILE")]
     ibundle_path: path::PathBuf,
 
-    /// force ibundle to be standalone
-    #[arg(long)]
-    standalone: bool,
-
     /// choose alternate basis sequence number
     #[arg(long)]
     basis: Option<SeqNum>,
 
+    /// force ibundle to be standalone
+    #[arg(
+        long,
+        default_value_if(
+            "basis_current",
+            clap::builder::ArgPredicate::IsPresent,
+            Some("true")
+        )
+    )]
+    standalone: bool,
+
+    /// allow creation of an empty ibundle
+    #[arg(
+        long,
+        default_value_if(
+            "basis_current",
+            clap::builder::ArgPredicate::IsPresent,
+            Some("true")
+        )
+    )]
+    allow_empty: bool,
+
+    /// choose basis to be current repository state
+    #[arg(long, conflicts_with("basis"))]
+    basis_current: bool,
+
     /// run quietly
     #[arg(short, long)]
     quiet: bool,
-
-    /// allow creation of an empty ibundle
-    #[arg(long)]
-    allow_empty: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -189,25 +256,6 @@ struct FetchArgs {
     /// perform a trial fetch without making changes to the repository
     #[arg(long)]
     dry_run: bool,
-
-    /// run quietly
-    #[arg(short, long)]
-    quiet: bool,
-
-    /// force fetch operation
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(clap::Args, Debug)]
-struct ToBundleArgs {
-    /// ibundle file to convert
-    #[arg(value_name = "IBUNDLE_FILE")]
-    ibundle_path: path::PathBuf,
-
-    /// bundle file to create from ibundle
-    #[arg(value_name = "BUNDLE_FILE")]
-    bundle_path: path::PathBuf,
 
     /// run quietly
     #[arg(short, long)]
@@ -240,9 +288,6 @@ enum Commands {
     /// Fetch from an ibundle
     Fetch(FetchArgs),
 
-    /// Convert an ibundle into a bundle
-    ToBundle(ToBundleArgs),
-
     /// Report status
     Status(StatusArgs),
 
@@ -254,35 +299,27 @@ enum Commands {
 
 type RefName = BString;
 
-fn ref_names_write<W: io::Write>(
-    ref_names: &Vec<RefName>,
-    writer: &mut W,
-) -> AResult<()> {
-    for name in ref_names.iter() {
-        writer.write_all(name)?;
-        writer.write_all(b"\n")?;
-    }
-    writer.write_all(b".\n")?;
-    Ok(())
-}
-
-fn ref_names_read<R: io::BufRead>(reader: &mut R) -> AResult<Vec<RefName>> {
-    let mut ref_names = Vec::new();
-    let mut line = RefName::from("");
-    while read_line_bytes(reader, &mut line)? {
-        if line == "." {
-            return Ok(ref_names);
-        }
-        ref_names.push(line.clone());
-    }
-    bail!("ref_names: missing final '.'; got {}", quoted(line));
-}
-
 // `name` => `Oid`.
 type ORefs = collections::BTreeMap<RefName, git2::Oid>;
+type ORefsItem<'a> = (&'a RefName, &'a git2::Oid);
 
-fn orefs_write<W: io::Write>(orefs: &ORefs, writer: &mut W) -> AResult<()> {
-    for (name, oid) in orefs.iter() {
+trait CollectORefs {
+    fn collect_orefs(self) -> ORefs;
+}
+
+impl<'a, T: IntoIterator<Item = ORefsItem<'a>>> CollectORefs for T {
+    fn collect_orefs(self) -> ORefs {
+        self.into_iter()
+            .map(|(name, &oid)| (name.clone(), oid))
+            .collect()
+    }
+}
+
+fn orefs_write<'a, W: io::Write>(
+    orefs: impl IntoIterator<Item = ORefsItem<'a>>,
+    writer: &mut W,
+) -> AResult<()> {
+    for (name, oid) in orefs.into_iter() {
         write_oid_bstr_bline(writer, oid, name.as_bstr())?;
     }
     writer.write_all(b".\n")?;
@@ -291,24 +328,26 @@ fn orefs_write<W: io::Write>(orefs: &ORefs, writer: &mut W) -> AResult<()> {
 
 fn orefs_read<R: io::BufRead>(reader: &mut R) -> AResult<ORefs> {
     let mut orefs = ORefs::new();
-    let mut line = BString::from("");
-    while read_line_bytes(reader, &mut line)? {
-        if line == "." {
+    let mut bline = BString::from("");
+    while read_bline(reader, &mut bline)? > 0 {
+        if bline == "." {
             return Ok(orefs);
         }
-        let (oid, name) = oid_bstr_parse(line.as_bstr())?;
+        let (oid, name) = oid_bstr_parse(bline.as_bstr())?;
         orefs.insert(name, oid);
     }
-    bail!("orefs: missing final '.'; got {}", quoted(line));
+    bail!("orefs: missing final '.'; got {}", quoted(bline));
 }
 
+// Each Oid is a "commit-ish" (an actual commit or a tag).
 type Commits = collections::BTreeMap<git2::Oid, BString>;
+type CommitsItem<'a> = (&'a git2::Oid, &'a BString);
 
-fn commits_write<W: io::Write>(
-    commits: &Commits,
+fn commits_write<'a, W: io::Write>(
+    commits: impl IntoIterator<Item = CommitsItem<'a>>,
     writer: &mut W,
 ) -> AResult<()> {
-    for (oid, comment) in commits.iter() {
+    for (oid, comment) in commits.into_iter() {
         write_oid_bstr_bline(writer, oid, comment.as_bstr())?;
     }
     writer.write_all(b".\n")?;
@@ -317,15 +356,15 @@ fn commits_write<W: io::Write>(
 
 fn commits_read<R: io::BufRead>(reader: &mut R) -> AResult<Commits> {
     let mut commits = Commits::new();
-    let mut line = BString::from("");
-    while read_line_bytes(reader, &mut line)? {
-        if line == "." {
+    let mut bline = BString::from("");
+    while read_bline(reader, &mut bline)? > 0 {
+        if bline == "." {
             return Ok(commits);
         }
-        let (oid, comment) = oid_bstr_parse(line.as_bstr())?;
+        let (oid, comment) = oid_bstr_parse(bline.as_bstr())?;
         commits.insert(oid, comment);
     }
-    bail!("commits: missing final '.'; got {}", quoted(line));
+    bail!("commits: missing final '.'; got {}", quoted(bline));
 }
 
 fn repo_open<P: AsRef<std::path::Path>>(
@@ -390,12 +429,12 @@ fn repo_is_empty(repo: &git2::Repository) -> AResult<bool> {
     Ok(orefs.len() == 0)
 }
 
-fn repo_find_missing_commits(
+fn repo_find_missing_commits<'a>(
     repo: &git2::Repository,
-    commits: &Commits,
+    commits: impl IntoIterator<Item = CommitsItem<'a>>,
 ) -> Commits {
     commits
-        .iter()
+        .into_iter()
         .filter_map(|(&commit_id, comment)| {
             if !repo.find_commit(commit_id).is_ok() {
                 Some((commit_id, comment.clone()))
@@ -406,61 +445,6 @@ fn repo_find_missing_commits(
         .collect()
 }
 
-fn repo_find_valid_commits(
-    repo: &git2::Repository,
-    commits: &Commits,
-) -> Commits {
-    commits
-        .iter()
-        .filter_map(|(&commit_id, comment)| {
-            if repo.find_commit(commit_id).is_ok() {
-                Some((commit_id, comment.clone()))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-fn pack_push_oid(pack: &mut BString, oid: &git2::Oid) {
-    pack.extend_from_slice(&oid.to_string().as_bytes());
-    pack.push(b'\n');
-}
-
-fn pack_push_basis_oid(pack: &mut BString, basis_oid: &git2::Oid) {
-    pack.push(b'^');
-    pack_push_oid(pack, basis_oid);
-}
-
-fn pack_objects_into(
-    pack: &BString,
-    pack_file: fs::File,
-    quiet: bool,
-) -> AResult<()> {
-    let mut args =
-        vec!["pack-objects", "--stdout", "--thin", "--delta-base-offset"];
-    if quiet {
-        args.push("--quiet")
-    }
-    let mut child = std::process::Command::new("git")
-        .args(args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(pack_file)
-        .spawn()?;
-
-    let mut child_stdin = child.stdin.take().unwrap();
-    child_stdin.write_all(&pack)?;
-    drop(child_stdin);
-
-    let exit_status = child.wait()?;
-    if !exit_status.success() {
-        bail!("failure in git pack-objects");
-    }
-    Ok(())
-}
-
 //////////////////////////////////////////////////////////////////////////////
 
 struct Directive {}
@@ -468,14 +452,17 @@ impl Directive {
     const REPO_ID: &[u8] = b"repo_id";
     const SEQ_NUM: &[u8] = b"seq_num";
     const BASIS_SEQ_NUM: &[u8] = b"basis_seq_num";
-    const STANDALONE: &[u8] = b"standalone";
     const HEAD_REF: &[u8] = b"head_ref";
     const HEAD_DETACHED: &[u8] = b"head_detached";
+    const OREFS: &[u8] = b"orefs";
     const COMMITS: &[u8] = b"commits";
     const PREREQS: &[u8] = b"prereqs";
-    const CHANGED_OREFS: &[u8] = b"changed_orefs";
-    const REMOVED_REFS: &[u8] = b"removed_refs";
-    const OREFS: &[u8] = b"orefs";
+    const ADDED_PACKED_OREFS: &[u8] = b"added_packed_orefs";
+    const ADDED_NOT_PACKED_OREFS: &[u8] = b"added_not_packed_orefs";
+    const REMOVED_OREFS: &[u8] = b"removed_orefs";
+    const MOVED_PACKED_OREFS: &[u8] = b"moved_packed_orefs";
+    const MOVED_NOT_PACKED_OREFS: &[u8] = b"moved_not_packed_orefs";
+    const UNCHANGED_OREFS: &[u8] = b"unchanged_orefs";
 }
 
 fn write_directive<W: io::Write, D: AsRef<[u8]>, Rest: AsRef<[u8]>>(
@@ -524,16 +511,16 @@ impl RepoMeta {
     }
 
     fn read<R: io::BufRead>(reader: &mut R) -> AResult<Self> {
-        let mut line = BString::from("");
-        read_line_bytes(reader, &mut line)?;
-        if line != REPO_META_FORMAT_V1 {
+        let mut bline = BString::from("");
+        read_bline(reader, &mut bline)?;
+        if bline != REPO_META_FORMAT_V1 {
             bail!("invalid repo meta file");
         }
 
         let mut meta = Self::new();
-        while read_line_bytes(reader, &mut line)? {
-            if line.starts_with(b"%") {
-                let (dir, rest) = bstr_pop_word(line[1..].as_bstr());
+        while read_bline(reader, &mut bline)? > 0 {
+            if bline.starts_with(b"%") {
+                let (dir, rest) = bstr_pop_word(bline[1..].as_bstr());
                 if dir == Directive::HEAD_REF {
                     meta.head_ref = BString::from(rest);
                 } else if dir == Directive::HEAD_DETACHED {
@@ -543,10 +530,10 @@ impl RepoMeta {
                 } else if dir == Directive::OREFS {
                     meta.orefs = orefs_read(reader)?;
                 } else {
-                    bail!("invalid RepoMeta directive {}", line);
+                    bail!("invalid RepoMeta directive {}", bline);
                 }
             } else {
-                bail!("invalid RepoMeta line {}", line);
+                bail!("invalid RepoMeta line {}", bline);
             }
         }
         Ok(meta)
@@ -570,25 +557,116 @@ impl RepoMeta {
     }
 }
 
-fn git_bundle_header_write<W: io::Write>(
+fn git_bundle_header_read<R: io::BufRead>(
+    reader: &mut R,
+) -> AResult<(Commits, ORefs)> {
+    let mut bline = BString::from("");
+    let mut prereqs = Commits::new();
+    let mut orefs = ORefs::new();
+    read_bline(reader, &mut bline)?;
+
+    if bline != GIT_BUNDLE_FORMAT_V2 {
+        bail!("not a V2 bundle file");
+    }
+    while read_bline(reader, &mut bline)? > 0 {
+        if bline[0] == b'-' {
+            let (oid, comment) = oid_bstr_parse(bline[1..].as_bstr())?;
+            prereqs.insert(oid, comment);
+        } else {
+            let (oid, name) = oid_bstr_parse(bline.as_bstr())?;
+            orefs.insert(name, oid);
+        }
+    }
+    Ok((prereqs, orefs))
+}
+
+fn git_bundle_header_write<'p, 'o, W: io::Write>(
     writer: &mut W,
-    prereqs: &Commits,
-    orefs: &ORefs,
+    prereqs: impl IntoIterator<Item = CommitsItem<'p>>,
+    orefs: impl IntoIterator<Item = ORefsItem<'o>>,
 ) -> AResult<()> {
     writer.write_all(GIT_BUNDLE_FORMAT_V2)?;
     writer.write_all(b"\n")?;
-    for (commit_id, comment) in prereqs.iter() {
+    for (commit_id, comment) in prereqs.into_iter() {
         writer.write_all(b"-")?;
         write_oid_bstr_bline(writer, commit_id, comment.as_bstr())?;
     }
-    for (name, oid) in orefs.iter() {
+    for (name, oid) in orefs.into_iter() {
         write_oid_bstr_bline(writer, oid, name.as_bstr())?;
     }
     writer.write_all(b"\n")?;
     Ok(())
 }
 
-fn git_fetch_bundle(
+fn handle_bundle_create_stderr<R: io::Read>(
+    stderr: &mut io::BufReader<R>,
+) -> io::Result<bool> {
+    let mut bundle_empty = false;
+    let mut bline = Vec::new();
+    loop {
+        read_bytes_until(stderr, &mut bline, |b| b == b'\n' || b == b'\r')?;
+        if bline.len() == 0 {
+            break;
+        }
+        if bline
+            .as_bstr()
+            .contains_str("Refusing to create empty bundle")
+        {
+            bundle_empty = true;
+        } else {
+            io::stderr().write_all(&bline)?;
+        }
+    }
+    Ok(bundle_empty)
+}
+
+fn git_bundle_create_stdin(
+    bundle_path: &path::Path,
+    stdin: fs::File,
+    quiet: bool,
+) -> AResult<()> {
+    let mut args: Vec<ffi::OsString> = vec!["bundle".into(), "create".into()];
+    if quiet {
+        args.push("-q".into());
+    }
+    args.push(bundle_path.as_os_str().into());
+    args.push("--stdin".into());
+
+    let mut child = std::process::Command::new("git")
+        .args(args)
+        .stdin(stdin)
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let mut stderr = io::BufReader::new(
+        child
+            .stderr
+            .take()
+            .expect("Command failed to provide `stderr`"),
+    );
+
+    let bundle_empty = handle_bundle_create_stderr(&mut stderr)?;
+    let exit_status = child.wait()?;
+
+    if bundle_empty {
+        // `empty_pack_bytes` comes from:
+        //   `git pack-objects --stdout < /dev/null > empty.pack`
+        let empty_pack_bytes = vec![
+            0x50, 0x41, 0x43, 0x4b, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+            0x00, 0x02, 0x9d, 0x08, 0x82, 0x3b, 0xd8, 0xa8, 0xea, 0xb5, 0x10,
+            0xad, 0x6a, 0xc7, 0x5c, 0x82, 0x3c, 0xfd, 0x3e, 0xd3, 0x1e,
+        ];
+
+        let mut writer = create_writer(&bundle_path)?;
+        git_bundle_header_write(&mut writer, &Commits::new(), &ORefs::new())?;
+        writer.write_all(&empty_pack_bytes)?;
+    } else if !exit_status.success() {
+        bail!("failure in git bundle create");
+    }
+    Ok(())
+}
+
+fn git_fetch_prune_bundle(
     bundle_path: &path::Path,
     quiet: bool,
     dry_run: bool,
@@ -611,30 +689,11 @@ fn git_fetch_bundle(
     Ok(())
 }
 
-fn git_fetch_from_pack<R: io::Read>(
-    repo: &git2::Repository,
-    prereqs: &Commits,
-    orefs: &ORefs,
-    pack_reader: R,
-    quiet: bool,
-    dry_run: bool,
-) -> AResult<()> {
-    let temp_dir_path = repo_mktemp(&repo)?;
-    let mut tmp = tempfile::Builder::new()
-        .prefix("temp")
-        .suffix(".bundle")
-        .tempfile_in(&temp_dir_path)?;
-    let mut tmp_file = tmp.as_file_mut();
-
-    git_bundle_header_write(&mut tmp_file, prereqs, orefs)?;
-
-    let mut pack_reader = pack_reader;
-    io::copy(&mut pack_reader, tmp_file)?;
-    git_fetch_bundle(&tmp.path(), quiet, dry_run)?;
-    Ok(())
-}
-
 //////////////////////////////////////////////////////////////////////////////
+
+fn repo_has_oid(repo: &git2::Repository, oid: git2::Oid) -> bool {
+    repo.find_object(oid, None).is_ok()
+}
 
 fn repo_commit(
     repo: &git2::Repository,
@@ -755,72 +814,64 @@ fn repo_meta_write(
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Remove from `orefs` each matching `oref` in `orefs_to_remove`.
-fn orefs_sub(orefs: &ORefs, orefs_to_remove: &ORefs) -> ORefs {
-    orefs
-        .iter()
-        .filter_map(|(name, oid)| {
-            if orefs_to_remove.get_key_value(name) == Some((name, oid)) {
-                None
-            } else {
-                Some((name.clone(), *oid))
-            }
-        })
-        .collect()
-}
-
-// Return names in `orefs` with names from `orefs_to_remove` removed.
-fn orefs_sub_names(orefs: &ORefs, orefs_to_remove: &ORefs) -> Vec<RefName> {
-    orefs
-        .iter()
-        .filter_map(|(name, _oid)| {
-            if !orefs_to_remove.contains_key(name) {
-                Some(name)
-            } else {
-                None
-            }
-        })
-        .cloned()
-        .collect()
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
 #[derive(Debug, Clone)]
 struct IBundle {
     repo_id: BString,
     seq_num: SeqNum,
     basis_seq_num: SeqNum,
-    standalone: bool,
     head_ref: BString,
     head_detached: bool,
     prereqs: Commits,
-    changed_orefs: ORefs,
-    removed_refs: Vec<RefName>,
-    orefs: ORefs,
+    added_orefs: ORefs,
+    removed_orefs: ORefs,
+    moved_orefs: ORefs,
+    unchanged_orefs: Option<ORefs>,
+    packed_orefs: ORefs,
 }
 
 impl IBundle {
     fn construct(
-        repo: &git2::Repository,
         repo_id: BString,
         seq_num: SeqNum,
         basis_seq_num: SeqNum,
         meta: &RepoMeta,
         basis_meta: &RepoMeta,
-        standalone: bool,
     ) -> AResult<Self> {
+        let mut removed_orefs = ORefs::new();
+        for (name, &oid) in basis_meta.orefs.iter() {
+            if !meta.orefs.contains_key(name) {
+                removed_orefs.insert(name.clone(), oid);
+            }
+        }
+
+        let mut added_orefs = ORefs::new();
+        let mut moved_orefs = ORefs::new();
+        let mut unchanged_orefs = ORefs::new();
+        for (name, &oid) in meta.orefs.iter() {
+            let name = name.clone();
+            if let Some(&oid2) = basis_meta.orefs.get(&name) {
+                if oid == oid2 {
+                    unchanged_orefs.insert(name, oid);
+                } else {
+                    moved_orefs.insert(name, oid);
+                }
+            } else {
+                added_orefs.insert(name, oid);
+            }
+        }
+
         let ibundle = IBundle {
             repo_id,
             seq_num,
             basis_seq_num,
-            standalone: standalone || basis_seq_num == 0,
             head_ref: meta.head_ref.clone(),
             head_detached: meta.head_detached,
-            prereqs: repo_find_valid_commits(repo, &basis_meta.commits),
-            changed_orefs: orefs_sub(&meta.orefs, &basis_meta.orefs),
-            removed_refs: orefs_sub_names(&basis_meta.orefs, &meta.orefs),
-            orefs: meta.orefs.clone(),
+            prereqs: Commits::new(),
+            added_orefs: added_orefs,
+            removed_orefs: removed_orefs,
+            moved_orefs,
+            unchanged_orefs: Some(unchanged_orefs),
+            packed_orefs: ORefs::new(),
         };
 
         Ok(ibundle)
@@ -831,74 +882,90 @@ impl IBundle {
             repo_id: BString::from(""),
             seq_num: 0,
             basis_seq_num: 0,
-            standalone: true,
             head_ref: BString::from(""),
             head_detached: false,
             prereqs: Commits::new(),
-            changed_orefs: ORefs::new(),
-            removed_refs: Vec::new(),
-            orefs: ORefs::new(),
+            added_orefs: ORefs::new(),
+            removed_orefs: ORefs::new(),
+            moved_orefs: ORefs::new(),
+            unchanged_orefs: None,
+            packed_orefs: ORefs::new(),
         }
     }
 
     fn read<R: io::BufRead>(reader: &mut R) -> AResult<Self> {
-        let mut line = BString::from("");
-        read_line_bytes(reader, &mut line)?;
-        if line != IBUNDLE_FORMAT_V1 {
-            bail!("not a V1 ibundle file");
+        let mut bline = BString::from("");
+        read_bline(reader, &mut bline)?;
+        if bline != IBUNDLE_FORMAT_V2 {
+            bail!("not a V2 ibundle file");
         }
 
-        let mut meta = Self::new();
-        while read_line_bytes(reader, &mut line)? {
-            if line.starts_with(b"%") {
-                let (dir, rest) = bstr_pop_word(line[1..].as_bstr());
+        let mut ibundle = Self::new();
+        let mut added_packed_orefs = ORefs::new();
+        let mut added_not_packed_orefs = ORefs::new();
+        let mut moved_packed_orefs = ORefs::new();
+        let mut moved_not_packed_orefs = ORefs::new();
+        while read_bline(reader, &mut bline)? > 0 {
+            if bline.starts_with(b"%") {
+                let (dir, rest) = bstr_pop_word(bline[1..].as_bstr());
                 if dir == Directive::REPO_ID {
-                    meta.repo_id = BString::from(rest);
+                    ibundle.repo_id = BString::from(rest);
                 } else if dir == Directive::SEQ_NUM {
-                    meta.seq_num = parse_seq_num(rest)?;
+                    ibundle.seq_num = parse_seq_num(rest)?;
                 } else if dir == Directive::BASIS_SEQ_NUM {
-                    meta.basis_seq_num = parse_seq_num(rest)?;
-                } else if dir == Directive::STANDALONE {
-                    meta.standalone = parse_bool(rest.as_bstr())?;
+                    ibundle.basis_seq_num = parse_seq_num(rest)?;
                 } else if dir == Directive::HEAD_REF {
-                    meta.head_ref = BString::from(rest);
+                    ibundle.head_ref = BString::from(rest);
                 } else if dir == Directive::HEAD_DETACHED {
-                    meta.head_detached = parse_bool(rest.as_bstr())?;
+                    ibundle.head_detached = parse_bool(rest.as_bstr())?;
                 } else if dir == Directive::PREREQS {
-                    meta.prereqs = commits_read(reader)?;
-                } else if dir == Directive::CHANGED_OREFS {
-                    meta.changed_orefs = orefs_read(reader)?;
-                } else if dir == Directive::REMOVED_REFS {
-                    meta.removed_refs = ref_names_read(reader)?;
-                } else if dir == Directive::OREFS {
-                    meta.orefs = orefs_read(reader)?;
+                    ibundle.prereqs = commits_read(reader)?;
+                } else if dir == Directive::ADDED_PACKED_OREFS {
+                    added_packed_orefs = orefs_read(reader)?;
+                } else if dir == Directive::ADDED_NOT_PACKED_OREFS {
+                    added_not_packed_orefs = orefs_read(reader)?;
+                } else if dir == Directive::REMOVED_OREFS {
+                    ibundle.removed_orefs = orefs_read(reader)?;
+                } else if dir == Directive::MOVED_PACKED_OREFS {
+                    moved_packed_orefs = orefs_read(reader)?;
+                } else if dir == Directive::MOVED_NOT_PACKED_OREFS {
+                    moved_not_packed_orefs = orefs_read(reader)?;
+                } else if dir == Directive::UNCHANGED_OREFS {
+                    ibundle.unchanged_orefs = Some(orefs_read(reader)?);
                 } else {
-                    bail!("invalid ibundle directive {}", line);
+                    bail!("invalid ibundle directive {}", bline);
                 }
             } else {
-                bail!("invalid ibundle line {}", line);
+                bail!("invalid ibundle line {}", bline);
             }
         }
-        if meta.standalone {
-            if meta.removed_refs.len() > 0 {
-                bail!("standalone ibundle has removed_refs");
-            }
-            if meta.changed_orefs.len() > 0 {
-                bail!("standalone ibundle has changed_orefs");
-            }
-        } else {
-            if meta.orefs.len() > 0 {
-                bail!("non-standalone ibundle has orefs");
-            }
-            if meta.prereqs.len() > 0 {
-                bail!("non-standalone ibundle has prereqs");
-            }
-        }
-        Ok(meta)
+        ibundle.added_orefs = added_packed_orefs
+            .iter()
+            .chain(added_not_packed_orefs.iter())
+            .collect_orefs();
+        ibundle.moved_orefs = moved_packed_orefs
+            .iter()
+            .chain(moved_not_packed_orefs.iter())
+            .collect_orefs();
+        ibundle.packed_orefs = added_packed_orefs
+            .into_iter()
+            .chain(moved_packed_orefs.into_iter())
+            .collect();
+
+        Ok(ibundle)
     }
 
-    fn write<W: io::Write>(&self, writer: &mut W) -> AResult<()> {
-        writer.write_all(IBUNDLE_FORMAT_V1)?;
+    fn write<W: io::Write>(
+        &self,
+        writer: &mut W,
+        standalone: bool,
+    ) -> AResult<()> {
+        let unchanged_orefs = if let Some(unchanged) = &self.unchanged_orefs {
+            unchanged
+        } else {
+            bail!("trying to write ibundle without unchanged_refs");
+        };
+        writer.write_all(IBUNDLE_FORMAT_V2)?;
         writer.write_all(b"\n")?;
         write_directive(writer, Directive::REPO_ID, &self.repo_id)?;
         write_directive(
@@ -911,42 +978,54 @@ impl IBundle {
             Directive::BASIS_SEQ_NUM,
             &format!("{}", self.basis_seq_num),
         )?;
-        write_directive_bool(writer, Directive::STANDALONE, self.standalone)?;
         write_directive(writer, Directive::HEAD_REF, &self.head_ref)?;
         write_directive_bool(
             writer,
             Directive::HEAD_DETACHED,
             self.head_detached,
         )?;
-        if self.standalone {
-            write_directive(writer, Directive::PREREQS, "")?;
-            commits_write(&self.prereqs, writer)?;
-            write_directive(writer, Directive::OREFS, "")?;
-            orefs_write(&self.orefs, writer)?;
-        } else {
-            write_directive(writer, Directive::CHANGED_OREFS, "")?;
-            orefs_write(&self.changed_orefs, writer)?;
-            write_directive(writer, Directive::REMOVED_REFS, "")?;
-            ref_names_write(&self.removed_refs, writer)?;
+        write_directive(writer, Directive::PREREQS, "")?;
+        commits_write(&self.prereqs, writer)?;
+        write_directive(writer, Directive::ADDED_PACKED_OREFS, "")?;
+        orefs_write(
+            self.added_orefs
+                .iter()
+                .filter(|(name, _oid)| self.packed_orefs.contains_key(*name)),
+            writer,
+        )?;
+        write_directive(writer, Directive::ADDED_NOT_PACKED_OREFS, "")?;
+        orefs_write(
+            self.added_orefs
+                .iter()
+                .filter(|(name, _oid)| !self.packed_orefs.contains_key(*name)),
+            writer,
+        )?;
+        write_directive(writer, Directive::REMOVED_OREFS, "")?;
+        orefs_write(&self.removed_orefs, writer)?;
+        write_directive(writer, Directive::MOVED_PACKED_OREFS, "")?;
+        orefs_write(
+            self.moved_orefs
+                .iter()
+                .filter(|(name, _oid)| self.packed_orefs.contains_key(*name)),
+            writer,
+        )?;
+        write_directive(writer, Directive::MOVED_NOT_PACKED_OREFS, "")?;
+        orefs_write(
+            self.moved_orefs
+                .iter()
+                .filter(|(name, _oid)| !self.packed_orefs.contains_key(*name)),
+            writer,
+        )?;
+        if standalone {
+            write_directive(writer, Directive::UNCHANGED_OREFS, "")?;
+            orefs_write(unchanged_orefs, writer)?;
         }
         writer.write_all(b"\n")?;
         Ok(())
     }
 
-    fn write_pack(&self, pack_file: fs::File, quiet: bool) -> AResult<()> {
-        let mut pack = BString::from("");
-        for (commit_id, _comment) in self.prereqs.iter() {
-            pack_push_basis_oid(&mut pack, commit_id);
-        }
-        for (_name, oid) in self.orefs.iter() {
-            pack_push_oid(&mut pack, oid);
-        }
-        pack_objects_into(&pack, pack_file, quiet)?;
-        Ok(())
-    }
-
     fn validate_repo_identity(
-        self: &Self,
+        &self,
         repo: &git2::Repository,
         force: bool,
     ) -> AResult<()> {
@@ -966,7 +1045,7 @@ impl IBundle {
     }
 
     fn determine_basis_meta(
-        self: &Self,
+        &self,
         repo: &git2::Repository,
         force: bool,
     ) -> AResult<RepoMeta> {
@@ -974,7 +1053,7 @@ impl IBundle {
             RepoMeta::new()
         } else if repo_has_basis(repo, &self.basis_seq_num) {
             repo_meta_read(&repo, self.basis_seq_num)?
-        } else if !self.standalone {
+        } else if self.unchanged_orefs.is_none() {
             bail!(
                 std::concat!(
                     "repo missing basis_seq_num={} and ibundle is not ",
@@ -998,24 +1077,22 @@ impl IBundle {
     }
 
     fn apply_basis_meta(&mut self, basis_meta: &RepoMeta) -> AResult<()> {
-        if self.standalone {
-            self.changed_orefs = orefs_sub(&self.orefs, &basis_meta.orefs);
-            self.removed_refs = orefs_sub_names(&basis_meta.orefs, &self.orefs);
-        } else {
-            self.orefs = basis_meta.orefs.clone();
-            for name in &self.removed_refs {
-                self.orefs.remove(name);
+        if self.unchanged_orefs.is_none() {
+            let mut unchanged_orefs = ORefs::new();
+            for (name, &oid) in basis_meta.orefs.iter() {
+                if !self.removed_orefs.contains_key(name)
+                    && !self.moved_orefs.contains_key(name)
+                {
+                    unchanged_orefs.insert(name.clone(), oid);
+                }
             }
-            for (name, &oid) in self.changed_orefs.iter() {
-                self.orefs.insert(name.clone(), oid);
-            }
-            self.prereqs = basis_meta.commits.clone();
+            self.unchanged_orefs = Some(unchanged_orefs);
         }
         Ok(())
     }
 
     fn validate_and_apply_basis(
-        self: &mut Self,
+        &mut self,
         repo: &git2::Repository,
         force: bool,
     ) -> AResult<()> {
@@ -1023,6 +1100,24 @@ impl IBundle {
         let basis_meta = self.determine_basis_meta(&repo, force)?;
         self.apply_basis_meta(&basis_meta)?;
         Ok(())
+    }
+
+    fn delta_orefs(&self) -> AResult<ORefs> {
+        Ok(self
+            .added_orefs
+            .iter()
+            .chain(self.moved_orefs.iter())
+            .collect_orefs())
+    }
+
+    fn full_orefs(&self) -> AResult<ORefs> {
+        let mut orefs = self.delta_orefs()?;
+        if let Some(unchanged_orefs) = &self.unchanged_orefs {
+            orefs.extend(unchanged_orefs.clone().into_iter());
+        } else {
+            bail!("using full_refs() on ibundle without `unchanged_orefs`");
+        }
+        Ok(orefs)
     }
 }
 
@@ -1061,12 +1156,21 @@ fn calc_basis_seq_num(
 
 fn read_ibundle<P: AsRef<std::path::Path>>(
     ibundle_path: P,
+    quiet: bool,
 ) -> AResult<(IBundle, io::BufReader<fs::File>)> {
     let ibundle_path = ibundle_path.as_ref();
     let mut ibundle_reader = open_reader(ibundle_path)?;
     let ibundle = IBundle::read(&mut ibundle_reader).with_context(|| {
         format!("failure reading ibundle file {}", quoted_path(ibundle_path))
     })?;
+
+    if !quiet {
+        println!(
+            "read {}, seq_num={}",
+            quoted_path(&ibundle_path),
+            ibundle.seq_num,
+        );
+    }
 
     Ok((ibundle, ibundle_reader))
 }
@@ -1084,24 +1188,29 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
 
     let seq_nums = repo_seq_nums(&repo)?;
     let seq_num = calc_next_seq_num(&seq_nums)?;
-    let basis_seq_num =
-        calc_basis_seq_num(create_args.basis, &seq_nums, seq_num)?;
-    let basis_meta = if basis_seq_num > 0 {
-        repo_meta_read(&repo, basis_seq_num)?
-    } else {
-        RepoMeta::new()
-    };
-
     let meta = repo_meta_current(&repo)?;
 
-    let ibundle = IBundle::construct(
-        &repo,
+    let basis_seq_num;
+    let basis_meta;
+    if create_args.basis_current {
+        basis_seq_num = seq_num;
+        basis_meta = meta.clone();
+    } else {
+        basis_seq_num =
+            calc_basis_seq_num(create_args.basis, &seq_nums, seq_num)?;
+        basis_meta = if basis_seq_num > 0 {
+            repo_meta_read(&repo, basis_seq_num)?
+        } else {
+            RepoMeta::new()
+        };
+    }
+
+    let mut ibundle = IBundle::construct(
         repo_id,
         seq_num,
         basis_seq_num,
         &meta,
         &basis_meta,
-        create_args.standalone,
     )?;
 
     if meta == basis_meta && !create_args.allow_empty {
@@ -1112,9 +1221,78 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
         return Ok(STATUS_EMPTY_BUNDLE);
     }
 
+    // OIDs for still-valid commits and refs are fair game to exclude.
+    let excluded_oids = basis_meta
+        .commits
+        .keys()
+        .chain(basis_meta.orefs.values())
+        .filter(|oid| repo_has_oid(&repo, **oid))
+        .collect::<collections::HashSet<_>>();
+
+    let bundle_orefs = if create_args.standalone {
+        ibundle.full_orefs()?
+    } else {
+        ibundle.delta_orefs()?
+    };
+
+    let temp_dir_path = repo_mktemp(&repo)?;
+    let bundle_tempfile = tempfile::Builder::new()
+        .prefix("temp")
+        .suffix(".bundle")
+        .tempfile_in(&temp_dir_path)?;
+
+    let mut stdin_tempfile = tempfile::Builder::new()
+        .prefix("temp")
+        .suffix(".stdin")
+        .tempfile_in(&temp_dir_path)?;
+
+    let mut stdin_file = stdin_tempfile.as_file_mut();
+    for oid in excluded_oids.iter() {
+        stdin_file.write_all(b"^")?;
+        stdin_file.write_all(oid_to_bstring(oid).as_bstr())?;
+        stdin_file.write_all(b"\n")?;
+    }
+    for (name, _oid) in bundle_orefs.iter() {
+        write_bline(&mut stdin_file, name.as_bstr())?;
+    }
+    stdin_file.flush()?;
+    drop(stdin_file);
+
+    git_bundle_create_stdin(
+        &bundle_tempfile.path(),
+        open_file(stdin_tempfile.path())?,
+        create_args.quiet,
+    )?;
+
+    let mut bundle_reader = open_reader(&bundle_tempfile.path())?;
+    let (mut prereqs, packed_orefs) =
+        git_bundle_header_read(&mut bundle_reader)?;
+
+    for (name, &oid) in bundle_orefs.iter() {
+        if !packed_orefs.contains_key(name) {
+            // Git thinks we don't need this `oref` because the associated
+            // object (tag or commit) was excluded by the basis.  We want it
+            // anyway, so add the associated commit to the `prereqs`.
+            if let Ok(obj) = repo.find_object(oid, None) {
+                if let Ok(commit) = obj.peel_to_commit() {
+                    let commit_id = commit.id();
+                    if !prereqs.contains_key(&commit_id) {
+                        prereqs.insert(commit_id, commit_comment(&commit));
+                    }
+                }
+            }
+        }
+    }
+
+    ibundle.prereqs = prereqs;
+    ibundle.packed_orefs = packed_orefs;
+
     let mut ibundle_writer = create_writer(&create_args.ibundle_path)?;
-    ibundle.write(&mut ibundle_writer)?;
-    ibundle.write_pack(ibundle_writer.into_inner()?, create_args.quiet)?;
+    ibundle.write(&mut ibundle_writer, create_args.standalone)?;
+    io::copy(&mut bundle_reader, &mut ibundle_writer)?;
+    drop(bundle_reader);
+    ibundle_writer.flush()?;
+    drop(ibundle_writer);
 
     repo_meta_write(&repo, seq_num, &meta)?;
     if !create_args.quiet {
@@ -1122,7 +1300,7 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
             "wrote {}, seq_num={}, {}/{} refs",
             quoted_path(&create_args.ibundle_path),
             ibundle.seq_num,
-            ibundle.orefs.len(),
+            bundle_orefs.len(),
             meta.orefs.len(),
         );
     }
@@ -1133,17 +1311,6 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
     if !fetch_args.quiet && fetch_args.dry_run {
         println!("(dry run)");
     }
-    let ibundle_path = &fetch_args.ibundle_path;
-    let (mut ibundle, ibundle_reader) = read_ibundle(ibundle_path)?;
-
-    if !fetch_args.quiet {
-        println!(
-            "read {}, seq_num={}, {} refs",
-            quoted_path(&fetch_args.ibundle_path),
-            ibundle.seq_num,
-            ibundle.orefs.len()
-        );
-    }
 
     let repo_path = ".";
     let repo = repo_open(repo_path)?;
@@ -1152,24 +1319,58 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         bail!("cannot fetch into non-bare repository");
     }
 
+    let ibundle_path = &fetch_args.ibundle_path;
+    let (mut ibundle, mut ibundle_reader) =
+        read_ibundle(ibundle_path, fetch_args.quiet)?;
+
     ibundle.validate_and_apply_basis(&repo, fetch_args.force)?;
 
     let missing_prereqs = repo_find_missing_commits(&repo, &ibundle.prereqs);
     if missing_prereqs.len() > 0 {
         bail!(
-            "repo is missing {} prerequisite commits listed in ibundle",
+            "repo is missing {} prerequisites listed in ibundle",
             missing_prereqs.len()
+        );
+    }
+
+    let full_orefs = ibundle.full_orefs()?;
+
+    // OIDs not being created by the pack must pre-exist.
+    let missing_orefs = full_orefs
+        .iter()
+        .filter(|(name, oid)| {
+            !ibundle.packed_orefs.contains_key(*name)
+                && !repo_has_oid(&repo, **oid)
+        })
+        .collect_orefs();
+
+    if missing_orefs.len() > 0 {
+        bail!(
+            "repo is missing {} orefs for basis_seq_num {}",
+            missing_orefs.len(),
+            ibundle.basis_seq_num
         );
     }
 
     if !fetch_args.dry_run {
         repo_id_write(&repo, ibundle.repo_id.as_bstr())?;
     }
-    git_fetch_from_pack(
-        &repo,
-        &ibundle.prereqs,
-        &ibundle.orefs,
-        ibundle_reader,
+
+    let temp_dir_path = repo_mktemp(&repo)?;
+    let mut bundle_tempfile = tempfile::Builder::new()
+        .prefix("temp")
+        .suffix(".bundle")
+        .tempfile_in(&temp_dir_path)?;
+    let mut bundle_file = bundle_tempfile.as_file_mut();
+
+    git_bundle_header_write(&mut bundle_file, &ibundle.prereqs, &full_orefs)?;
+    io::copy(&mut ibundle_reader, bundle_file)?;
+    drop(ibundle_reader);
+    bundle_file.flush()?;
+    drop(bundle_file);
+
+    git_fetch_prune_bundle(
+        &bundle_tempfile.path(),
         fetch_args.quiet,
         fetch_args.dry_run,
     )?;
@@ -1181,7 +1382,7 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         meta = RepoMeta {
             head_ref: BString::from(head_ref),
             head_detached: ibundle.head_detached,
-            orefs: ibundle.orefs.clone(),
+            orefs: full_orefs.clone(),
             commits: Commits::new(),
         };
     } else {
@@ -1198,7 +1399,7 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         meta = repo_meta_current(&repo)?;
     }
 
-    if meta.orefs != ibundle.orefs {
+    if meta.orefs != full_orefs {
         bail!("final repository refs do not match those in ibundle");
     }
     if meta.head_ref != ibundle.head_ref
@@ -1232,46 +1433,6 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
                 ""
             }
         );
-    }
-    Ok(STATUS_OK)
-}
-
-fn cmd_to_bundle(to_bundle_args: &ToBundleArgs) -> AResult<i32> {
-    let ibundle_path = &to_bundle_args.ibundle_path;
-    let (mut ibundle, mut ibundle_reader) = read_ibundle(ibundle_path)?;
-    if !to_bundle_args.quiet {
-        println!(
-            "read {}, seq_num={}, {} refs",
-            quoted_path(&to_bundle_args.ibundle_path),
-            ibundle.seq_num,
-            ibundle.orefs.len()
-        );
-    }
-
-    if !ibundle.standalone {
-        let repo_path = ".";
-        let repo = repo_open(repo_path)?;
-        ibundle.validate_and_apply_basis(&repo, to_bundle_args.force)?;
-    };
-
-    let mut writer = create_writer(&to_bundle_args.bundle_path)?;
-    git_bundle_header_write(&mut writer, &ibundle.prereqs, &ibundle.orefs)?;
-
-    io::copy(&mut ibundle_reader, &mut writer)?;
-    if !to_bundle_args.quiet {
-        println!(
-            "wrote {}, {} refs, {} prereqs",
-            quoted_path(&to_bundle_args.bundle_path),
-            ibundle.orefs.len(),
-            ibundle.prereqs.len(),
-        );
-        println!("To apply this bundle file in destination repository:");
-        println!("  git fetch .../file.bundle --force --prune \"*:*\"");
-        if ibundle.head_detached {
-            println!("  git update-ref --no-deref HEAD {}", ibundle.head_ref);
-        } else {
-            println!("  git symbolic-ref HEAD {}", ibundle.head_ref);
-        }
     }
     Ok(STATUS_OK)
 }
@@ -1366,7 +1527,6 @@ fn run() -> AResult<i32> {
     let exit_status = match &cli.command {
         Commands::Create(create_args) => cmd_create(create_args)?,
         Commands::Fetch(fetch_args) => cmd_fetch(fetch_args)?,
-        Commands::ToBundle(to_bundle_args) => cmd_to_bundle(to_bundle_args)?,
         Commands::Status(status_args) => cmd_status(status_args)?,
         Commands::Clean(clean_args) => cmd_clean(clean_args)?,
     };
