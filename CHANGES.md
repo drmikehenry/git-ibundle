@@ -16,6 +16,8 @@
 - Add switch `git-ibundle create --basis-current` for bootstrapping a
   pre-existing pair of mirrored repositories.
 
+- Disallow cleaning all metadata via `git-ibundle clean --keep 0`.
+
 ## Version 0.1.1
 
 - Force fetching via `git fetch --force` to allow non-fast-forward fetches (such

@@ -276,8 +276,11 @@ struct StatusArgs {
 #[derive(clap::Args, Debug)]
 struct CleanArgs {
     /// Number of sequence numbers to retain
-    #[arg(long, default_value = "20")]
-    keep: usize,
+    #[arg(long,
+        default_value = "20",
+        value_parser = clap::value_parser!(u64).range(1..)
+        )]
+    keep: u64,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1490,22 +1493,23 @@ fn cmd_clean(clean_args: &CleanArgs) -> AResult<i32> {
         bail!("missing repo_id; no sequence numbers to clean");
     }
     let mut seq_nums = repo_seq_nums(&repo)?;
-    if seq_nums.len() <= clean_args.keep {
+    let keep = usize::try_from(clean_args.keep).unwrap_or(usize::MAX);
+    if seq_nums.len() <= keep {
         println!(
             "have {} sequence numbers, keeping up to {} => nothing to clean",
             seq_nums.len(),
-            clean_args.keep
+            keep
         );
     } else {
         println!(
             "have {} sequence numbers, keeping up to {} => removing {}",
             seq_nums.len(),
-            clean_args.keep,
-            seq_nums.len() - clean_args.keep,
+            keep,
+            seq_nums.len() - keep,
         );
         let meta_dir_path = repo_meta_dir_path(&repo);
 
-        while seq_nums.len() > clean_args.keep {
+        while seq_nums.len() > keep {
             if let Some(seq_num) = seq_nums.pop() {
                 let meta_path = meta_dir_path.join(&seq_num.to_string());
                 fs::remove_file(&meta_path).with_context(|| {
