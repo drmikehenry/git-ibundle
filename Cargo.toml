@@ -14,7 +14,7 @@ exclude = ["repotests", ".cargo"]
 
 [dependencies]
 anyhow = "1.0.66"
-bstr = "1.1.0"
+bstr = "1.3.0"
 clap = { version = "4.0.32", features = ["derive"] }
 git2 = { version = "^0.16", default_features = false, features = ["vendored-libgit2"] }
 tempfile = "3.3.0"

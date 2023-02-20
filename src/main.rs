@@ -23,16 +23,13 @@ const IBUNDLE_FORMAT_V2: &[u8] = b"# v2 git ibundle";
 const REPO_META_FORMAT_V1: &[u8] = b"# v1 repo meta";
 const GIT_BUNDLE_FORMAT_V2: &[u8] = b"# v2 git bundle";
 
-fn quoted_bstr(s: &BStr) -> String {
+fn quoted<B: AsRef<BStr>>(s: B) -> String {
+    let s = s.as_ref();
     if s.is_ascii() && !s.contains(&b'\'') {
         format!("'{}'", s)
     } else {
         format!("{:?}", s)
     }
-}
-
-fn quoted<B: AsRef<BStr>>(s: B) -> String {
-    quoted_bstr(s.as_ref())
 }
 
 fn quoted_path<P: AsRef<std::path::Path>>(path: P) -> String {
@@ -44,7 +41,7 @@ fn name_to_string(name: &BStr) -> AResult<String> {
     if let Ok(s) = name.to_str() {
         Ok(s.to_string())
     } else {
-        bail!("name {} is not valid UTF8", quoted_bstr(name));
+        bail!("name {} is not valid UTF8", quoted(name));
     }
 }
 
