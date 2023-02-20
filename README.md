@@ -339,3 +339,85 @@ Options:
 
 By default, git-ibundle retains the metadata for all sequence numbers.  Use
 `git-ibundle clean` to cleanup older sequence numbers.
+
+## Comparison with Git bundles
+
+Most of the heavy lifting done by git-ibundle is handled by Git's own bundle
+functionality.  For non-incremental mirroring, Git's bundles provide a complete
+solution.  For example, the following packages the entirety of a source
+repository into a bundle file:
+
+    # Run from within the source Git repository:
+    git bundle create ../repo.bundle --all
+
+Similarly, in an empty destination repository, the following command fetches
+from the bundle and replicates almost the entire repository state:
+
+    # Run from within the destination Git repository:
+    git fetch --prune --force repo.bundle "*:*"
+
+The only thing missing is the setting of `HEAD` to the appropriate symbolic
+branch name, as bundle files have no means of communicating the name of that
+branch.  But one additional pair of commands takes care of that.  In the source
+repository, query `HEAD` via:
+
+    $ git symbolic-ref HEAD
+    refs/heads/main
+
+Then, in the destination repository, manually set `HEAD` accordingly, e.g.:
+
+    git symbolic-ref HEAD refs/heads/main
+
+Git also provides a way to exclude commits from a bundle by providing them with
+a leading caret (`^`).  After a single additional commit to `main` in the
+source, a new bundle file can be created with just the additional commit
+(assuming `main` is the only reference in the repository):
+
+    git bundle create ../repo.bundle --all ^HEAD~
+
+The bundle might contain headers such as the following:
+
+    # v2 git bundle
+    -9a3bbf283e30565d9ac378cb73c36ca8a417c5e0 Some commit log message
+    22a3d70042ecc8bce2772bfa85eadf64adb77441 refs/heads/main
+    22a3d70042ecc8bce2772bfa85eadf64adb77441 HEAD
+
+The commit `9a3bbf2` was sent in the first bundle; it has become a prerequisite
+for this incremental bundle file.  Git does a great job of distilling the set of
+requested references and exclusions down to a minimal set of prerequisite
+commits and changed references.
+
+Unfortunately, Git's prerequisites must always be commits.  Annotated tags point
+to tag objects, which then point to commits.  Bundle files have no way to
+express a tag object as a prerequisite.
+
+In addition, Git will remove any requested reference that points to an object
+excluded by any of the `^` exclusions.  Suppose a repository containing many
+commits on `main` is bundled in its entirety via:
+
+    git bundle create ../repo.bundle --all
+
+Now suppose the only change is to add a new branch a couple of commits back from
+`HEAD`:
+
+    git branch branch1 HEAD~2
+
+Attempting to request that this new branch be added to a new incremental bundle
+will fail:
+
+    git bundle create ../repo.bundle branch1 ^main
+
+This is because `branch1` points to an ancestor of `main`, and `main` has been
+excluded, causing `branch1` to be excluded as well.
+
+To perform incremental mirroring, git-ibundle uses `git bundle create` in the
+source repository to create temporary bundle files at each synchronization
+point.  Within the bundle are a list of prerequisite commits, a pack of new
+objects, and a list of references that are new (i.e., that point to newly
+created objects in the pack).  git-ibundle then extracts this information from
+the bundle file and combines it with other metadata to create an ibundle file;
+at the destination repository, the ibundle is combined with stored repository
+metadata to reconstruct the full set of references that are written into a
+temporary bundle file; this bundle is applied to the destination repository with
+`git fetch --prune --force temp.bundle "*:*"`; finally, `HEAD` is set
+appropriately based on the value conveyed in the ibundle file.
