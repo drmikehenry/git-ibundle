@@ -1,0 +1,11 @@
+[package]
+name = "show-ref"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.66"
+bstr = "1.1.0"
+git2 = { version = "^0.16", default_features = false, features = ["vendored-libgit2"] }
