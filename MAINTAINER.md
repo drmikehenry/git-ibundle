@@ -225,6 +225,105 @@
       git -C repo2.git symbolic-ref HEAD refs/heads/main
       git -C repo2.git fetch ../repo.bundle '*:*'
 
+### Detached head with unique OID
+
+Within a Git bundle, if `HEAD` is the only reference to an object in the pack,
+that object is not unpacked (or at least not retained) after a `git fetch` of
+the bundle.
+
+Consider a repo with at least one commit:
+
+    mkdir head-test
+    cd head-test
+    git init
+    date >> date.txt
+    git add date.txt
+    git commit -m 'First commit.'
+
+Create a bundle containing only `HEAD` with all of the commits on the associated
+branch:
+
+    git bundle create ../head-only.bundle HEAD
+
+This yields a bundle with no prereqs and a single reference, `HEAD`, e.g.:
+
+    # v2 git bundle
+    c6d6563d1260f395f03e717979e839835dc4ad93 HEAD
+
+Git will fetch from this bundle into an empty repository without error, e.g.:
+
+    mkdir ../fetch-head.git
+    git -C ../fetch-head.git init --bare
+    git -C ../fetch-head.git fetch ../head-only.bundle '*:*'
+
+No references are shown, and the object is not found:
+
+    $ git -C ../fetch-head.git show-ref
+
+    $ git -C ../fetch-head.git log c6d6563d1260f395f03e717979e839835dc4ad93
+    fatal: bad object c6d6563d1260f395f03e717979e839835dc4ad93
+
+No ancestor objects are found, either, though they were also in the pack.
+
+If the bundle file `head-only.bundle` is edited in-place to chane `HEAD` to
+`refs/heads/main` in the headers while retaining the pack as-is, the fetch
+operation now works: the objects are unpacked and available in the destination
+repository.  This indicates that the branch name is important, and that `HEAD`
+is insufficient to ensure proper object unpacking.
+
+Typically, `HEAD` will not be the only reference to a packed object (since
+`HEAD` is typically a symbolic reference to a named branch), but it's possible
+to construct a detached-head scenario where this happens.  One way is to start
+with a repository with at least one commit, make `main.bundle` representing the
+`main` branch so far, then checkout the latest commit in detached-head mode and
+add a new commit; starting from `head-test` above:
+
+    git bundle create ../main.bundle main
+    git checkout "$(git rev-parse HEAD)"
+    date >> date.txt
+    git commit -am 'Second commit (with no named branch).'
+
+An incremental Git bundle may be created by excluding the original `main` and
+keeping the changes in `HEAD`:
+
+    git bundle create ../incremental.bundle HEAD ^main
+
+The headers of `all.bundle` show that `HEAD` differs from `main`:
+
+    # v2 git bundle
+    c6d6563d1260f395f03e717979e839835dc4ad93 refs/heads/main
+    48d206f26f914ea43494e8b6ceab91bbf039c7dc HEAD
+
+Fetching both bundles into a new bare repository mirroring `head-test` succeeds
+without error:
+
+    mkdir ../head-test.git
+    git -C ../head-test.git init --bare
+    git -C ../head-test.git fetch ../main.bundle '*:*'
+    git -C ../head-test.git fetch ../incremental.bundle '*:*'
+
+But as before, the new commit is missing:
+
+    $ git -C ../head-test.git log 48d206f26f914ea43494e8b6ceab91bbf039c7dc
+    fatal: bad object 48d206f26f914ea43494e8b6ceab91bbf039c7dc
+
+A work-around for this behavior is to replace the name `HEAD` with a temporary
+branch name before fetching, then delete the temporary branch name afterward.
+For uniqueness, the branch could be named `refs/heads/HEAD-<OID>`, e.g.:
+
+    git branch HEAD-48d206f26f914ea43494e8b6ceab91bbf039c7dc
+    git bundle create ../incremental2.bundle \
+      HEAD-48d206f26f914ea43494e8b6ceab91bbf039c7dc ^main
+    git branch -d HEAD-48d206f26f914ea43494e8b6ceab91bbf039c7dc
+
+    git -C ../head-test.git fetch ../incremental2.bundle '*:*'
+    $ git -C ../head-test.git log 48d206f26f914ea43494e8b6ceab91bbf039c7dc
+
+    <log output>
+
+    git -C ../head-test.git branch \
+      -d HEAD-48d206f26f914ea43494e8b6ceab91bbf039c7dc
+
 ### Git symbolic references
 
 Git permits the creation of symbolic references (other than just `HEAD`).  It's
