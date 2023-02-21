@@ -37,8 +37,8 @@ fn quoted_path<P: AsRef<std::path::Path>>(path: P) -> String {
     quoted(p.as_bytes())
 }
 
-fn name_to_string(name: &BStr) -> AResult<String> {
-    if let Ok(s) = name.to_str() {
+fn name_to_string(name: impl AsRef<BStr>) -> AResult<String> {
+    if let Ok(s) = name.as_ref().to_str() {
         Ok(s.to_string())
     } else {
         bail!("name {} is not valid UTF8", quoted(name));
@@ -445,6 +445,19 @@ fn repo_find_missing_commits<'a>(
         .collect()
 }
 
+fn repo_remove_refs(
+    repo: &git2::Repository,
+    refs_to_remove: &collections::HashSet<BString>,
+) -> AResult<()> {
+    for res in repo.references()? {
+        let mut r = res?;
+        if refs_to_remove.contains(r.name_bytes().as_bstr()) {
+            r.delete()?;
+        }
+    }
+    Ok(())
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 struct Directive {}
@@ -666,13 +679,13 @@ fn git_bundle_create_stdin(
     Ok(())
 }
 
-fn git_fetch_prune_bundle(
+fn git_fetch_bundle(
     bundle_path: &path::Path,
     quiet: bool,
     dry_run: bool,
 ) -> AResult<()> {
     let mut args: Vec<ffi::OsString> =
-        vec!["fetch".into(), "--prune".into(), "--force".into()];
+        vec!["fetch".into(), "--force".into()];
     if quiet {
         args.push("-q".into())
     }
@@ -1356,6 +1369,26 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         repo_id_write(&repo, ibundle.repo_id.as_bstr())?;
     }
 
+    let pre_meta = repo_meta_current(&repo)?;
+    let refs_to_remove = pre_meta
+        .orefs
+        .iter()
+        .filter_map(|(name, _oid)| {
+            if name != b"HEAD".as_bstr() && !full_orefs.contains_key(name) {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<collections::HashSet<_>>();
+
+    let bundle_orefs = full_orefs
+        .iter()
+        .filter(|(name, oid)| {
+            *name != b"HEAD".as_bstr() && pre_meta.orefs.get(*name) != Some(oid)
+        })
+        .collect_orefs();
+
     let temp_dir_path = repo_mktemp(&repo)?;
     let mut bundle_tempfile = tempfile::Builder::new()
         .prefix("temp")
@@ -1363,52 +1396,60 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         .tempfile_in(&temp_dir_path)?;
     let mut bundle_file = bundle_tempfile.as_file_mut();
 
-    git_bundle_header_write(&mut bundle_file, &ibundle.prereqs, &full_orefs)?;
+    git_bundle_header_write(&mut bundle_file, &ibundle.prereqs, &bundle_orefs)?;
     io::copy(&mut ibundle_reader, bundle_file)?;
     drop(ibundle_reader);
     bundle_file.flush()?;
     drop(bundle_file);
 
-    git_fetch_prune_bundle(
+    git_fetch_bundle(
         &bundle_tempfile.path(),
         fetch_args.quiet,
         fetch_args.dry_run,
     )?;
 
     let head_ref = ibundle.head_ref.as_bstr();
-    let meta;
-
-    if fetch_args.dry_run {
-        meta = RepoMeta {
-            head_ref: BString::from(head_ref),
-            head_detached: ibundle.head_detached,
-            orefs: full_orefs.clone(),
-            commits: Commits::new(),
-        };
-    } else {
+    if !fetch_args.dry_run && head_ref != "" {
         if ibundle.head_detached {
             let commit_id = parse_oid(head_ref)?;
             repo.set_head_detached(commit_id)?;
-        } else if head_ref != "" {
+        } else {
             // TODO: `name_to_string` is necessary only because git2 does not
             // provide a bytes-only way to set references.  Consider extending
             // git2 with bytes-only equivalent for `repo.set_head()`.
             repo.set_head(&name_to_string(head_ref)?)?;
         }
-
-        meta = repo_meta_current(&repo)?;
     }
 
-    if meta.orefs != full_orefs {
+    if !fetch_args.dry_run {
+        repo_remove_refs(&repo, &refs_to_remove)?;
+    }
+
+    let post_meta = if fetch_args.dry_run {
+        RepoMeta {
+            head_ref: BString::from(head_ref),
+            head_detached: ibundle.head_detached,
+            orefs: full_orefs.clone(),
+            commits: Commits::new(),
+        }
+    } else {
+        repo_meta_current(&repo)?
+    };
+
+    if post_meta.orefs != full_orefs {
         bail!("final repository refs do not match those in ibundle");
     }
-    if meta.head_ref != ibundle.head_ref
-        || meta.head_detached != ibundle.head_detached
+    if post_meta.head_ref != ibundle.head_ref
+        || post_meta.head_detached != ibundle.head_detached
     {
         bail!(
             "repository HEAD ({}{}) does not match ibundle HEAD ({}{})",
-            quoted(meta.head_ref),
-            if meta.head_detached { ", detached" } else { "" },
+            quoted(post_meta.head_ref),
+            if post_meta.head_detached {
+                ", detached"
+            } else {
+                ""
+            },
             quoted(ibundle.head_ref),
             if ibundle.head_detached {
                 ", detached"
@@ -1419,15 +1460,15 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
     }
 
     if !fetch_args.dry_run {
-        repo_meta_write(&repo, ibundle.seq_num, &meta)?;
+        repo_meta_write(&repo, ibundle.seq_num, &post_meta)?;
     }
 
     if !fetch_args.quiet {
         println!(
             "final state: {} refs, HEAD {}{}",
-            meta.orefs.len(),
-            quoted(&meta.head_ref),
-            if meta.head_detached {
+            post_meta.orefs.len(),
+            quoted(&post_meta.head_ref),
+            if post_meta.head_detached {
                 " (detached)"
             } else {
                 ""
