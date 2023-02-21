@@ -703,6 +703,32 @@ fn git_fetch_bundle(
 
 //////////////////////////////////////////////////////////////////////////////
 
+fn repo_fetch(
+    repo: &git2::Repository,
+    prereqs: &Commits,
+    bundle_orefs: &ORefs,
+    mut pack_reader: impl io::Read,
+    quiet: bool,
+    dry_run: bool,
+) -> AResult<()> {
+    let temp_dir_path = repo_mktemp(repo)?;
+    let mut bundle_tempfile = tempfile::Builder::new()
+        .prefix("temp")
+        .suffix(".bundle")
+        .tempfile_in(&temp_dir_path)?;
+    let mut bundle_file = bundle_tempfile.as_file_mut();
+
+    git_bundle_header_write(&mut bundle_file, prereqs, bundle_orefs)?;
+    io::copy(&mut pack_reader, bundle_file)?;
+    drop(pack_reader);
+    bundle_file.flush()?;
+    drop(bundle_file);
+
+    git_fetch_bundle(&bundle_tempfile.path(), quiet, dry_run)?;
+
+    Ok(())
+}
+
 fn repo_has_oid(repo: &git2::Repository, oid: git2::Oid) -> bool {
     repo.find_object(oid, None).is_ok()
 }
@@ -1332,7 +1358,7 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
     }
 
     let ibundle_path = &fetch_args.ibundle_path;
-    let (mut ibundle, mut ibundle_reader) =
+    let (mut ibundle, ibundle_reader) =
         read_ibundle(ibundle_path, fetch_args.quiet)?;
 
     ibundle.validate_and_apply_basis(&repo, fetch_args.force)?;
@@ -1408,21 +1434,11 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         }
     }
 
-    let temp_dir_path = repo_mktemp(&repo)?;
-    let mut bundle_tempfile = tempfile::Builder::new()
-        .prefix("temp")
-        .suffix(".bundle")
-        .tempfile_in(&temp_dir_path)?;
-    let mut bundle_file = bundle_tempfile.as_file_mut();
-
-    git_bundle_header_write(&mut bundle_file, &ibundle.prereqs, &bundle_orefs)?;
-    io::copy(&mut ibundle_reader, bundle_file)?;
-    drop(ibundle_reader);
-    bundle_file.flush()?;
-    drop(bundle_file);
-
-    git_fetch_bundle(
-        &bundle_tempfile.path(),
+    repo_fetch(
+        &repo,
+        &ibundle.prereqs,
+        &bundle_orefs,
+        ibundle_reader,
         fetch_args.quiet,
         fetch_args.dry_run,
     )?;
