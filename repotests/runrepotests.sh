@@ -267,6 +267,15 @@ must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
 end_context
 
+set_context 'new commit with no branch'
+must_git -C "$SRC1" checkout $Q "$(must_git -C "$SRC1" rev-parse HEAD)"
+must_git_commit_file "$SRC1"
+must_git_ibundle "$SRC1" create $Q "$IBU1"
+must_git_ibundle "$DST1" fetch $Q "$IBU1"
+fsck_and_diff "$DST1" "$SRC1"
+must_git -C "$SRC1" checkout $Q main
+end_context
+
 set_context 'bundle from --basis'
 must_git_ibundle "$SRC1" create $Q --basis "$saved_basis" "$IBU1"
 must_git_ibundle "$DST1-basis-$saved_basis" fetch $Q "$IBU1"

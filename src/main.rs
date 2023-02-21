@@ -7,7 +7,7 @@ use tempfile;
 use uuid;
 
 use anyhow::{anyhow, bail, Context};
-use bstr::{BStr, BString, ByteSlice};
+use bstr::{BStr, BString, ByteSlice, ByteVec};
 
 use clap::Parser;
 
@@ -684,8 +684,7 @@ fn git_fetch_bundle(
     quiet: bool,
     dry_run: bool,
 ) -> AResult<()> {
-    let mut args: Vec<ffi::OsString> =
-        vec!["fetch".into(), "--force".into()];
+    let mut args: Vec<ffi::OsString> = vec!["fetch".into(), "--force".into()];
     if quiet {
         args.push("-q".into())
     }
@@ -1370,7 +1369,7 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
     }
 
     let pre_meta = repo_meta_current(&repo)?;
-    let refs_to_remove = pre_meta
+    let mut refs_to_remove = pre_meta
         .orefs
         .iter()
         .filter_map(|(name, _oid)| {
@@ -1382,12 +1381,32 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         })
         .collect::<collections::HashSet<_>>();
 
-    let bundle_orefs = full_orefs
+    let mut bundle_orefs = full_orefs
         .iter()
         .filter(|(name, oid)| {
             *name != b"HEAD".as_bstr() && pre_meta.orefs.get(*name) != Some(oid)
         })
         .collect_orefs();
+
+    if let Some(&head_oid) = ibundle.packed_orefs.get(b"HEAD".as_bstr()) {
+        let packed_oids = ibundle
+            .packed_orefs
+            .iter()
+            .filter_map(|(name, &oid)| {
+                if name != b"HEAD".as_bstr() {
+                    Some(oid)
+                } else {
+                    None
+                }
+            })
+            .collect::<collections::HashSet<_>>();
+        if !packed_oids.contains(&head_oid) {
+            let mut h = BString::from("refs/heads/HEAD-");
+            h.push_str(oid_to_bstring(&head_oid));
+            bundle_orefs.insert(h.clone(), head_oid);
+            refs_to_remove.insert(h);
+        }
+    }
 
     let temp_dir_path = repo_mktemp(&repo)?;
     let mut bundle_tempfile = tempfile::Builder::new()
