@@ -729,6 +729,18 @@ fn repo_fetch(
     Ok(())
 }
 
+fn repo_set_head_ref(
+    repo: &git2::Repository,
+    head_ref: impl AsRef<BStr>,
+) -> AResult<()> {
+    // TODO: `name_to_string` is necessary only because git2 does not
+    // provide a bytes-only way to set references.  Consider extending
+    // git2 with bytes-only equivalent for `repo.set_head()`.
+    let head_ref_str = name_to_string(head_ref)?;
+    repo.set_head(&head_ref_str)?;
+    Ok(())
+}
+
 fn repo_has_oid(repo: &git2::Repository, oid: git2::Oid) -> bool {
     repo.find_object(oid, None).is_ok()
 }
@@ -1449,10 +1461,7 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
             let commit_id = parse_oid(head_ref)?;
             repo.set_head_detached(commit_id)?;
         } else {
-            // TODO: `name_to_string` is necessary only because git2 does not
-            // provide a bytes-only way to set references.  Consider extending
-            // git2 with bytes-only equivalent for `repo.set_head()`.
-            repo.set_head(&name_to_string(head_ref)?)?;
+            repo_set_head_ref(&repo, head_ref)?;
         }
     }
 
