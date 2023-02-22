@@ -1,14 +1,17 @@
 #!/bin/bash
 
 # verbose=true
+# release=true
 
 ##############################################################################
 
 test -z "$verbose" && verbose=false
+test -z "$release" && release=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
         '-v') verbose=true;;
+        '--release') release=true;;
         *) printf 'Invalid arg: %q\n' "$1"; exit 1;;
     esac
     shift
@@ -58,6 +61,13 @@ REPOTESTS_DIR="$PWD"
 test -f "$REPOTESTS_DIR/runrepotests.sh" ||
     die 'Run from directory with `runrepotests.sh`'
 
+target_dir="$(readlink -f "$REPOTESTS_DIR/../target/x86_64-unknown-linux-musl")"
+if $release; then
+    GIT_IBUNDLE="$target_dir/release/git-ibundle"
+else
+    GIT_IBUNDLE="$target_dir/debug/git-ibundle"
+fi
+
 export GIT_AUTHOR_NAME='author'
 export GIT_AUTHOR_EMAIL='author@example.com'
 export GIT_COMMITTER_NAME='committer'
@@ -105,7 +115,7 @@ git_ibundle() {
     (
         must_cd "$1"
         shift
-        cargo run -q -- "$@"
+        "$GIT_IBUNDLE" "$@"
     )
 }
 
