@@ -286,6 +286,13 @@ if $non_utf8; then
     must_git_ibundle "$DST1" fetch $Q "$IBU1"
     fsck_and_diff "$DST1" "$SRC1"
     end_context
+
+    set_context 'checkout branch_non_utf8\x80 (same as main)'
+    must_git -C "$SRC1" checkout $Q $'branch_non_utf8\x80'
+    must_git_ibundle "$SRC1" create $Q "$IBU1"
+    must_git_ibundle "$DST1" fetch $Q "$IBU1"
+    fsck_and_diff "$DST1" "$SRC1"
+    end_context
 fi
 
 set_context 'checkout main2 (same as main)'

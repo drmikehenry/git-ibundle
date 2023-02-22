@@ -729,15 +729,41 @@ fn repo_fetch(
     Ok(())
 }
 
+// git2::Repository::set_head() is below:
+//
+//   pub fn set_head(&self, refname: &str) -> Result<(), Error> {
+//       let refname = CString::new(refname)?;
+//       unsafe {
+//           try_call!(raw::git_repository_set_head(self.raw, refname));
+//       }
+//       Ok(())
+//   }
+//
+// The passed-in `&str` value `refname` is not interpreted in any way; it's
+// simply passed along into `git_repository_set_head()`, a function that expects
+// raw bytes and does not require UTF8 semantics.
+//
+// Until git2 provides a `set_head_bytes()` function as requested in
+// <https://github.com/rust-lang/git2-rs/issues/925>, and provided in pull
+// request <https://github.com/rust-lang/git2-rs/pull/931>, the only way to
+// support non-utf8 head values with git2 is to use the unsafe conversion
+// `String::from_utf8_unchecked()`.
+
 fn repo_set_head_ref(
     repo: &git2::Repository,
     head_ref: impl AsRef<BStr>,
 ) -> AResult<()> {
-    // TODO: `name_to_string` is necessary only because git2 does not
-    // provide a bytes-only way to set references.  Consider extending
-    // git2 with bytes-only equivalent for `repo.set_head()`.
-    let head_ref_str = name_to_string(head_ref)?;
-    repo.set_head(&head_ref_str)?;
+    let head_ref = head_ref.as_ref();
+    if let Ok(head_ref_str) = name_to_string(head_ref) {
+        repo.set_head(&head_ref_str)?;
+    } else {
+        // `head_ref` is non-utf8.
+        let head_ref_bytes = head_ref.to_vec();
+        // Safety: repo.set_head() does not interpret its argument as a
+        // utf8-string; it merely passed it along to the underlying library
+        // that's expecting raw bytes.
+        repo.set_head(&unsafe { String::from_utf8_unchecked(head_ref_bytes) })?;
+    }
     Ok(())
 }
 
