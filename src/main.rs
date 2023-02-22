@@ -213,12 +213,16 @@ struct CreateArgs {
     #[arg(long)]
     basis: Option<SeqNum>,
 
+    /// choose basis to be current repository state
+    #[arg(long, conflicts_with("basis"))]
+    basis_current: bool,
+
     /// force ibundle to be standalone
     #[arg(
         long,
         default_value_if(
             "basis_current",
-            clap::builder::ArgPredicate::IsPresent,
+            clap::builder::ArgPredicate::Equals("true".into()),
             Some("true")
         )
     )]
@@ -229,15 +233,11 @@ struct CreateArgs {
         long,
         default_value_if(
             "basis_current",
-            clap::builder::ArgPredicate::IsPresent,
+            clap::builder::ArgPredicate::Equals("true".into()),
             Some("true")
         )
     )]
     allow_empty: bool,
-
-    /// choose basis to be current repository state
-    #[arg(long, conflicts_with("basis"))]
-    basis_current: bool,
 
     /// run quietly
     #[arg(short, long)]

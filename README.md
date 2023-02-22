@@ -186,9 +186,9 @@ Arguments:
 
 Options:
       --basis <BASIS>  choose alternate basis sequence number
+      --basis-current  choose basis to be current repository state
       --standalone     force ibundle to be standalone
       --allow-empty    allow creation of an empty ibundle
-      --basis-current  choose basis to be current repository state
   -q, --quiet          run quietly
   -h, --help           Print help information
   -V, --version        Print version information
