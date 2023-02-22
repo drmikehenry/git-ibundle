@@ -157,7 +157,30 @@ must_git_commit_file() {
         "$(printf 'Commit %s\nSummary.\n\nMore\ncomments.\n' "$commit_num")"
 }
 
-must_mkdir tmp -p
+if ! test -d tmp; then
+    cat <<EOF
+tmp/ not present; must pre-create.  Options:
+
+1. Use normal directory:
+
+    mkdir tmp
+
+2. Symlink into /run/user which may be tmpfs (for non-utf8 filenames):
+
+    mkdir /run/user/$(id -u)/git-ibundle-repotests-tmp
+    ln -s /run/user/$(id -u)/git-ibundle-repotests-tmp tmp
+
+EOF
+    exit 1
+fi
+
+if touch $'tmp/test\x80' 2> /dev/null; then
+    rm $'tmp/test\x80'
+    non_utf8=true
+else
+    non_utf8=false
+    echo "tmp/ lacks support for non-utf8 paths; some tests will be skipped."
+fi
 
 rm -rf tmp/steps tmp/repos tmp/repos.*
 mkdir tmp/steps tmp/repos
@@ -255,6 +278,15 @@ must_git_ibundle "$SRC1" create $Q "$IBU1"
 must_git_ibundle "$DST1" fetch $Q "$IBU1"
 fsck_and_diff "$DST1" "$SRC1"
 end_context
+
+if $non_utf8; then
+    set_context 'branch: branch_non_utf8\x80'
+    must_git -C "$SRC1" branch $'branch_non_utf8\x80'
+    must_git_ibundle "$SRC1" create $Q "$IBU1"
+    must_git_ibundle "$DST1" fetch $Q "$IBU1"
+    fsck_and_diff "$DST1" "$SRC1"
+    end_context
+fi
 
 set_context 'checkout main2 (same as main)'
 must_git -C "$SRC1" checkout $Q main2
