@@ -40,7 +40,7 @@ step_str() {
 set_context() {
     step=$((step+1))
     context="step $(step_str): $1"
-    echo "$context" > repos/context
+    echo "$context" > tmp/repos/context
     if $verbose; then
         printf '\n'
         printf '=======================================================\n'
@@ -50,7 +50,7 @@ set_context() {
 }
 
 end_context() {
-    cp -a repos "steps/repos.$(step_str)"
+    cp -a tmp/repos "tmp/steps/repos.$(step_str)"
 }
 
 REPOTESTS_DIR="$PWD"
@@ -67,6 +67,11 @@ export GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
 
 must_cd() {
     cd "$1" || die "Could not change to directory $1"
+}
+
+# May invoke as `must_mkdir dirname -p`.
+must_mkdir() {
+    mkdir "$@" || die "Could not create directory $1"
 }
 
 must_git() {
@@ -142,12 +147,14 @@ must_git_commit_file() {
         "$(printf 'Commit %s\nSummary.\n\nMore\ncomments.\n' "$commit_num")"
 }
 
-rm -rf steps repos repos.*
-mkdir steps repos
+must_mkdir tmp -p
+
+rm -rf tmp/steps tmp/repos tmp/repos.*
+mkdir tmp/steps tmp/repos
 
 set_context 'create repos, verify initial status'
-SRC1='repos/repo1'
-DST1='repos/repo1.git'
+SRC1='tmp/repos/repo1'
+DST1='tmp/repos/repo1.git'
 IBU1='../repo1.ibundle'
 BU1='../repo1.bundle'
 mkdir -p "$SRC1"
