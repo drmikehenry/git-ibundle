@@ -1381,12 +1381,24 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
 
     ibundle.validate_and_apply_basis(&repo, fetch_args.force)?;
 
+    let mut ready_for_ibundle = true;
+
     let missing_prereqs = repo_find_missing_commits(&repo, &ibundle.prereqs);
     if missing_prereqs.len() > 0 {
-        bail!(
-            "repo is missing {} prerequisites listed in ibundle",
-            missing_prereqs.len()
-        );
+        ready_for_ibundle = false;
+        if log_enabled!(Level::Error) {
+            eprintln!(
+                "repo is missing {} prerequisites listed in ibundle",
+                missing_prereqs.len()
+            );
+            if log_enabled!(Level::Debug) {
+                for (oid, msg) in missing_prereqs.iter() {
+                    eprintln!("  {:?} {}", oid, quoted(msg));
+                }
+            } else {
+                eprintln!(" (use `--verbose` to display them)");
+            }
+        }
     }
 
     let full_orefs = ibundle.full_orefs()?;
@@ -1399,11 +1411,27 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
                 && !repo_has_oid(&repo, **oid)
         })
         .collect_orefs();
-
     if missing_orefs.len() > 0 {
+        ready_for_ibundle = false;
+        if log_enabled!(Level::Error) {
+            eprintln!(
+                "repo is missing {} orefs for basis_seq_num {}",
+                missing_orefs.len(),
+                ibundle.basis_seq_num
+            );
+            if log_enabled!(Level::Debug) {
+                for (name, oid) in missing_orefs.iter() {
+                    eprintln!("  {:?} {}", oid, quoted(name));
+                }
+            } else {
+                eprintln!(" (use `--verbose` to display them)");
+            }
+        }
+    }
+
+    if !ready_for_ibundle {
         bail!(
-            "repo is missing {} orefs for basis_seq_num {}",
-            missing_orefs.len(),
+            "repo not ready for ibundle with basis_seq_num {}",
             ibundle.basis_seq_num
         );
     }
