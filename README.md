@@ -185,13 +185,14 @@ Arguments:
   <IBUNDLE_FILE>  ibundle file to create
 
 Options:
-      --basis <BASIS>  choose alternate basis sequence number
-      --basis-current  choose basis to be current repository state
-      --standalone     force ibundle to be standalone
-      --allow-empty    allow creation of an empty ibundle
-  -q, --quiet          run quietly
+      --basis <BASIS>  Choose alternate basis sequence number
+      --basis-current  Choose basis to be current repository state
+      --standalone     Force ibundle to be standalone
+      --allow-empty    Allow creation of an empty ibundle
   -h, --help           Print help information
   -V, --version        Print version information
+  -v, --verbose...     More output per occurrence
+  -q, --quiet...       Less output per occurrence
 ```
 
 On the first ibundle creation, the repository is assigned a random repo_id.
@@ -252,11 +253,12 @@ Arguments:
   <IBUNDLE_FILE>  ibundle file to fetch
 
 Options:
-      --dry-run  perform a trial fetch without making changes to the repository
-  -q, --quiet    run quietly
-      --force    force fetch operation
-  -h, --help     Print help information
-  -V, --version  Print version information
+      --dry-run     Perform a trial fetch without making changes to the repository
+      --force       Force fetch operation
+  -h, --help        Print help information
+  -V, --version     Print version information
+  -v, --verbose...  More output per occurrence
+  -q, --quiet...    Less output per occurrence
 ```
 
 With `--dry-run`, a fetch operation is simulated but no changes will be made to
@@ -279,12 +281,16 @@ to override this caution.  `--force` may be used in these cases:
 ### Report status
 
 ```text
+Report status
+
 Usage: git-ibundle status [OPTIONS]
 
 Options:
-      --long     Provide longer status
-  -h, --help     Print help information
-  -V, --version  Print version information
+      --long        Provide longer status
+  -h, --help        Print help information
+  -V, --version     Print version information
+  -v, --verbose...  More output per occurrence
+  -q, --quiet...    Less output per occurrence
 ```
 
 This provides git-ibundle status for a given repository.  For example:
@@ -335,6 +341,9 @@ Options:
       --keep <KEEP>  Number of sequence numbers to retain [default: 20]
   -h, --help         Print help information
   -V, --version      Print version information
+  -v, --verbose...   More output per occurrence
+  -q, --quiet...     Less output per occurrence
+
 ```
 
 By default, git-ibundle retains the metadata for all sequence numbers.  Use

@@ -8,8 +8,8 @@ use uuid;
 
 use anyhow::{anyhow, bail, Context};
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-
 use clap::Parser;
+use log::{log_enabled, Level};
 
 type AResult<T> = anyhow::Result<T>;
 type SeqNum = u64;
@@ -199,6 +199,9 @@ fn oid_bstr_parse(bstr: &BStr) -> AResult<(git2::Oid, BString)> {
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
+    #[command(flatten)]
+    #[command(next_display_order = 10000)]
+    verbose: clap_verbosity_flag::Verbosity<clap_verbosity_flag::InfoLevel>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -209,15 +212,15 @@ struct CreateArgs {
     #[arg(value_name = "IBUNDLE_FILE")]
     ibundle_path: path::PathBuf,
 
-    /// choose alternate basis sequence number
+    /// Choose alternate basis sequence number
     #[arg(long)]
     basis: Option<SeqNum>,
 
-    /// choose basis to be current repository state
+    /// Choose basis to be current repository state
     #[arg(long, conflicts_with("basis"))]
     basis_current: bool,
 
-    /// force ibundle to be standalone
+    /// Force ibundle to be standalone
     #[arg(
         long,
         default_value_if(
@@ -228,7 +231,7 @@ struct CreateArgs {
     )]
     standalone: bool,
 
-    /// allow creation of an empty ibundle
+    /// Allow creation of an empty ibundle
     #[arg(
         long,
         default_value_if(
@@ -238,10 +241,6 @@ struct CreateArgs {
         )
     )]
     allow_empty: bool,
-
-    /// run quietly
-    #[arg(short, long)]
-    quiet: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -250,15 +249,11 @@ struct FetchArgs {
     #[arg(value_name = "IBUNDLE_FILE")]
     ibundle_path: path::PathBuf,
 
-    /// perform a trial fetch without making changes to the repository
+    /// Perform a trial fetch without making changes to the repository
     #[arg(long)]
     dry_run: bool,
 
-    /// run quietly
-    #[arg(short, long)]
-    quiet: bool,
-
-    /// force fetch operation
+    /// Force fetch operation
     #[arg(long)]
     force: bool,
 }
@@ -636,10 +631,9 @@ fn handle_bundle_create_stderr<R: io::Read>(
 fn git_bundle_create_stdin(
     bundle_path: &path::Path,
     stdin: fs::File,
-    quiet: bool,
 ) -> AResult<()> {
     let mut args: Vec<ffi::OsString> = vec!["bundle".into(), "create".into()];
-    if quiet {
+    if !log_enabled!(Level::Info) {
         args.push("-q".into());
     }
     args.push(bundle_path.as_os_str().into());
@@ -679,13 +673,9 @@ fn git_bundle_create_stdin(
     Ok(())
 }
 
-fn git_fetch_bundle(
-    bundle_path: &path::Path,
-    quiet: bool,
-    dry_run: bool,
-) -> AResult<()> {
+fn git_fetch_bundle(bundle_path: &path::Path, dry_run: bool) -> AResult<()> {
     let mut args: Vec<ffi::OsString> = vec!["fetch".into(), "--force".into()];
-    if quiet {
+    if !log_enabled!(Level::Info) {
         args.push("-q".into())
     }
     if dry_run {
@@ -708,7 +698,6 @@ fn repo_fetch(
     prereqs: &Commits,
     bundle_orefs: &ORefs,
     mut pack_reader: impl io::Read,
-    quiet: bool,
     dry_run: bool,
 ) -> AResult<()> {
     let temp_dir_path = repo_mktemp(repo)?;
@@ -724,7 +713,7 @@ fn repo_fetch(
     bundle_file.flush()?;
     drop(bundle_file);
 
-    git_fetch_bundle(&bundle_tempfile.path(), quiet, dry_run)?;
+    git_fetch_bundle(&bundle_tempfile.path(), dry_run)?;
 
     Ok(())
 }
@@ -1232,7 +1221,6 @@ fn calc_basis_seq_num(
 
 fn read_ibundle<P: AsRef<std::path::Path>>(
     ibundle_path: P,
-    quiet: bool,
 ) -> AResult<(IBundle, io::BufReader<fs::File>)> {
     let ibundle_path = ibundle_path.as_ref();
     let mut ibundle_reader = open_reader(ibundle_path)?;
@@ -1240,7 +1228,7 @@ fn read_ibundle<P: AsRef<std::path::Path>>(
         format!("failure reading ibundle file {}", quoted_path(ibundle_path))
     })?;
 
-    if !quiet {
+    if log_enabled!(Level::Info) {
         println!(
             "read {}, seq_num={}",
             quoted_path(&ibundle_path),
@@ -1337,7 +1325,6 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
     git_bundle_create_stdin(
         &bundle_tempfile.path(),
         open_file(stdin_tempfile.path())?,
-        create_args.quiet,
     )?;
 
     let mut bundle_reader = open_reader(&bundle_tempfile.path())?;
@@ -1371,7 +1358,7 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
     drop(ibundle_writer);
 
     repo_meta_write(&repo, seq_num, &meta)?;
-    if !create_args.quiet {
+    if log_enabled!(Level::Info) {
         println!(
             "wrote {}, seq_num={}, {}/{} refs",
             quoted_path(&create_args.ibundle_path),
@@ -1384,7 +1371,7 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
 }
 
 fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
-    if !fetch_args.quiet && fetch_args.dry_run {
+    if log_enabled!(Level::Info) && fetch_args.dry_run {
         println!("(dry run)");
     }
 
@@ -1396,8 +1383,7 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
     }
 
     let ibundle_path = &fetch_args.ibundle_path;
-    let (mut ibundle, ibundle_reader) =
-        read_ibundle(ibundle_path, fetch_args.quiet)?;
+    let (mut ibundle, ibundle_reader) = read_ibundle(ibundle_path)?;
 
     ibundle.validate_and_apply_basis(&repo, fetch_args.force)?;
 
@@ -1477,7 +1463,6 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         &ibundle.prereqs,
         &bundle_orefs,
         ibundle_reader,
-        fetch_args.quiet,
         fetch_args.dry_run,
     )?;
 
@@ -1533,7 +1518,7 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         repo_meta_write(&repo, ibundle.seq_num, &post_meta)?;
     }
 
-    if !fetch_args.quiet {
+    if log_enabled!(Level::Info) {
         println!(
             "final state: {} refs, HEAD {}{}",
             post_meta.orefs.len(),
@@ -1636,6 +1621,9 @@ fn cmd_clean(clean_args: &CleanArgs) -> AResult<i32> {
 
 fn run() -> AResult<i32> {
     let cli = Cli::parse();
+    env_logger::Builder::new()
+        .filter_level(cli.verbose.log_level_filter())
+        .init();
     let exit_status = match &cli.command {
         Commands::Create(create_args) => cmd_create(create_args)?,
         Commands::Fetch(fetch_args) => cmd_fetch(fetch_args)?,
