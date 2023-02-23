@@ -259,11 +259,7 @@ struct FetchArgs {
 }
 
 #[derive(clap::Args, Debug)]
-struct StatusArgs {
-    /// Provide longer status
-    #[arg(long)]
-    long: bool,
-}
+struct StatusArgs {}
 
 #[derive(clap::Args, Debug)]
 struct CleanArgs {
@@ -1228,13 +1224,11 @@ fn read_ibundle<P: AsRef<std::path::Path>>(
         format!("failure reading ibundle file {}", quoted_path(ibundle_path))
     })?;
 
-    if log_enabled!(Level::Info) {
-        println!(
-            "read {}, seq_num={}",
-            quoted_path(&ibundle_path),
-            ibundle.seq_num,
-        );
-    }
+    log::info!(
+        "read {}, seq_num={}",
+        quoted_path(&ibundle_path),
+        ibundle.seq_num,
+    );
 
     Ok((ibundle, ibundle_reader))
 }
@@ -1278,10 +1272,12 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
     )?;
 
     if meta == basis_meta && !create_args.allow_empty {
-        eprintln!(std::concat!(
-            "error: refusing to create an empty ibundle; ",
-            "consider `--allow-empty`"
-        ));
+        if log_enabled!(Level::Error) {
+            eprintln!(std::concat!(
+                "error: refusing to create an empty ibundle; ",
+                "consider `--allow-empty`"
+            ));
+        }
         return Ok(STATUS_EMPTY_BUNDLE);
     }
 
@@ -1358,21 +1354,19 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
     drop(ibundle_writer);
 
     repo_meta_write(&repo, seq_num, &meta)?;
-    if log_enabled!(Level::Info) {
-        println!(
-            "wrote {}, seq_num={}, {}/{} refs",
-            quoted_path(&create_args.ibundle_path),
-            ibundle.seq_num,
-            bundle_orefs.len(),
-            meta.orefs.len(),
-        );
-    }
+    log::info!(
+        "wrote {}, seq_num={}, {}/{} refs",
+        quoted_path(&create_args.ibundle_path),
+        ibundle.seq_num,
+        bundle_orefs.len(),
+        meta.orefs.len(),
+    );
     Ok(STATUS_OK)
 }
 
 fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
-    if log_enabled!(Level::Info) && fetch_args.dry_run {
-        println!("(dry run)");
+    if fetch_args.dry_run {
+        log::info!("(dry run)");
     }
 
     let repo_path = ".";
@@ -1518,22 +1512,21 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
         repo_meta_write(&repo, ibundle.seq_num, &post_meta)?;
     }
 
-    if log_enabled!(Level::Info) {
-        println!(
-            "final state: {} refs, HEAD {}{}",
-            post_meta.orefs.len(),
-            quoted(&post_meta.head_ref),
-            if post_meta.head_detached {
-                " (detached)"
-            } else {
-                ""
-            }
-        );
-    }
+    log::info!(
+        "final state: {} refs, HEAD {}{}",
+        post_meta.orefs.len(),
+        quoted(&post_meta.head_ref),
+        if post_meta.head_detached {
+            " (detached)"
+        } else {
+            ""
+        }
+    );
     Ok(STATUS_OK)
 }
 
 fn cmd_status(status_args: &StatusArgs) -> AResult<i32> {
+    drop(status_args);
     let repo_path = ".";
     let repo = repo_open(repo_path)?;
     let mut failed = false;
@@ -1543,18 +1536,18 @@ fn cmd_status(status_args: &StatusArgs) -> AResult<i32> {
     let max_seq_num = calc_max_seq_num(&seq_nums)?;
     let next_seq_num = calc_next_seq_num(&seq_nums)?;
 
-    println!("repo_id: {}", repo_id);
-    println!("max_seq_num: {}", max_seq_num);
-    println!("next_seq_num: {}", next_seq_num);
+    log::info!("repo_id: {}", repo_id);
+    log::info!("max_seq_num: {}", max_seq_num);
+    log::info!("next_seq_num: {}", next_seq_num);
+    log::debug!("kept_seq_nums: {}", seq_nums.len());
 
-    if seq_nums.len() > 0 {
-        if status_args.long {
-            println!("long_details:");
-            println!("  {:<8} {:<8} {}", "seq_num", "num_refs", "HEAD");
+    if log_enabled!(Level::Debug) {
+        if seq_nums.len() > 0 {
+            log::debug!("  {:<8} {:<8} {}", "seq_num", "num_refs", "HEAD");
             for &seq_num in seq_nums.iter().rev() {
                 match repo_meta_read(&repo, seq_num) {
                     Ok(meta) => {
-                        println!(
+                        log::debug!(
                             "  {:<8} {:<8} {}{}",
                             seq_num,
                             meta.orefs.len(),
@@ -1567,12 +1560,14 @@ fn cmd_status(status_args: &StatusArgs) -> AResult<i32> {
                         );
                     }
                     Err(e) => {
-                        println!("  {:<8} **Error: {}", seq_num, e);
+                        log::debug!("  {:<8} **Error: {}", seq_num, e);
                         failed = true;
                     }
                 }
             }
         }
+    } else {
+        log::info!("Use `--verbose` for details.");
     }
 
     Ok(if failed { STATUS_ERROR } else { STATUS_OK })
@@ -1588,13 +1583,13 @@ fn cmd_clean(clean_args: &CleanArgs) -> AResult<i32> {
     let mut seq_nums = repo_seq_nums(&repo)?;
     let keep = usize::try_from(clean_args.keep).unwrap_or(usize::MAX);
     if seq_nums.len() <= keep {
-        println!(
+        log::info!(
             "have {} sequence numbers, keeping up to {} => nothing to clean",
             seq_nums.len(),
             keep
         );
     } else {
-        println!(
+        log::info!(
             "have {} sequence numbers, keeping up to {} => removing {}",
             seq_nums.len(),
             keep,
@@ -1623,6 +1618,8 @@ fn run() -> AResult<i32> {
     let cli = Cli::parse();
     env_logger::Builder::new()
         .filter_level(cli.verbose.log_level_filter())
+        .format(|buf, record| writeln!(buf, "{}", record.args()))
+        .target(env_logger::Target::Stdout)
         .init();
     let exit_status = match &cli.command {
         Commands::Create(create_args) => cmd_create(create_args)?,
@@ -1637,7 +1634,9 @@ fn main() {
     let exit_status = match run() {
         Ok(exit_status) => exit_status,
         Err(e) => {
-            eprintln!("error: {:?}", e);
+            if log_enabled!(Level::Error) {
+                eprintln!("error: {:?}", e);
+            }
             STATUS_ERROR
         }
     };

@@ -286,7 +286,6 @@ Report status
 Usage: git-ibundle status [OPTIONS]
 
 Options:
-      --long        Provide longer status
   -h, --help        Print help information
   -V, --version     Print version information
   -v, --verbose...  More output per occurrence
@@ -308,14 +307,14 @@ next `git-ibundle create` operation.
 The `max_seq_num` field indicates the sequence number used by the most recent
 `git-ibundle create` operation.
 
-With `--long`, more detail is provided:
+With `--verbose`, more detail is provided:
 
 ```console
-$ git-ibundle status --long
+$ git-ibundle status --verbose
 repo_id: 18450f13-4003-474a-a69e-22782ef3848f
 max_seq_num: 13
 next_seq_num: 14
-long_details:
+details:
   seq_num  num_refs HEAD
   1        0        refs/heads/main
   2        0        refs/heads/main

@@ -18,6 +18,8 @@
 
 - Disallow cleaning all metadata via `git-ibundle clean --keep 0`.
 
+- Remove `status --long` switch; use `status --verbose` instead.
+
 ## Version 0.1.1
 
 - Force fetching via `git fetch --force` to allow non-fast-forward fetches (such

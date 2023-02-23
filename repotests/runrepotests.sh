@@ -189,13 +189,14 @@ set_context 'create repos, verify initial status'
 SRC1='tmp/repos/repo1'
 DST1='tmp/repos/repo1.git'
 IBU1='../repo1.ibundle'
-BU1='../repo1.bundle'
 mkdir -p "$SRC1"
 mkdir -p "$DST1"
 must_git -C "$SRC1" init $Q --initial-branch main
 must_git -C "$DST1" init $Q --initial-branch main --bare
 out=$(must_git_ibundle "$SRC1" status)
 expected_out=$'repo_id: NONE\nmax_seq_num: 0\nnext_seq_num: 1'
+expected_out="$expected_out"$'\nUse `--verbose` for details.'
+
 test "$out" = "$expected_out" ||
     die $'status had wrong output:\n'"$out"$'\nexpected:\n'"$expected_out"
 must_git_ibundle_status "$SRC1"
