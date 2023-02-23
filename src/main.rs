@@ -1180,6 +1180,21 @@ impl IBundle {
         }
         Ok(orefs)
     }
+
+    fn summary(&self) -> String {
+        format!(
+            "seq_num {}, added {}, removed {}, moved {}, unchanged {}",
+            self.seq_num,
+            self.added_orefs.len(),
+            self.removed_orefs.len(),
+            self.moved_orefs.len(),
+            if let Some(unchanged_orefs) = &self.unchanged_orefs {
+                format!("{}", unchanged_orefs.len())
+            } else {
+                format!("???")
+            }
+        )
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1223,12 +1238,6 @@ fn read_ibundle<P: AsRef<std::path::Path>>(
     let ibundle = IBundle::read(&mut ibundle_reader).with_context(|| {
         format!("failure reading ibundle file {}", quoted_path(ibundle_path))
     })?;
-
-    log::info!(
-        "read {}, seq_num={}",
-        quoted_path(&ibundle_path),
-        ibundle.seq_num,
-    );
 
     Ok((ibundle, ibundle_reader))
 }
@@ -1355,11 +1364,9 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
 
     repo_meta_write(&repo, seq_num, &meta)?;
     log::info!(
-        "wrote {}, seq_num={}, {}/{} refs",
+        "wrote {}: {}",
         quoted_path(&create_args.ibundle_path),
-        ibundle.seq_num,
-        bundle_orefs.len(),
-        meta.orefs.len(),
+        ibundle.summary()
     );
     Ok(STATUS_OK)
 }
@@ -1380,6 +1387,8 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
     let (mut ibundle, ibundle_reader) = read_ibundle(ibundle_path)?;
 
     ibundle.validate_and_apply_basis(&repo, fetch_args.force)?;
+
+    log::info!("read {}: {}", quoted_path(&ibundle_path), ibundle.summary());
 
     let mut ready_for_ibundle = true;
 
