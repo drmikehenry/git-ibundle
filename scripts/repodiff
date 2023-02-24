@@ -49,8 +49,8 @@ must_be_equal() {
         diff -u <(printf '%s\n' "$src_refs") <(printf '%s\n' "$dst_refs")
         die "refs differ between $1 and $2"
     fi
-    head1=$(must_git_symbolic_ref "$1")
-    head2=$(must_git_symbolic_ref "$2")
+    head1=$(must_git_symbolic_ref "$1" HEAD)
+    head2=$(must_git_symbolic_ref "$2" HEAD)
     if [ "$head1" != "$head2" ]; then
         printf '%s HEAD=%s\n' "$1" "$head1"
         printf '%s HEAD=%s\n' "$2" "$head2"
