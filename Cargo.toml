@@ -1,6 +1,6 @@
 [package]
 name = "git-ibundle"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Michael Henry <rust@drmikehenry.com>"]
 edition = "2021"
 description = "A tool for incremental offline mirroring of a Git repository"
@@ -22,3 +22,6 @@ git2 = { version = "^0.16", default_features = false, features = ["vendored-libg
 log = "0.4.17"
 tempfile = "3.3.0"
 uuid = { version = "1.2.2", features = ["v4"] }
+
+[dev-dependencies]
+assert_cmd = "2.0.8"
