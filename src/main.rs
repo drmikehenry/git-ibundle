@@ -259,6 +259,13 @@ struct FetchArgs {
 }
 
 #[derive(clap::Args, Debug)]
+struct ShowArgs {
+    /// ibundle file to examine
+    #[arg(value_name = "IBUNDLE_FILE")]
+    ibundle_path: path::PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
 struct StatusArgs {}
 
 #[derive(clap::Args, Debug)]
@@ -278,6 +285,9 @@ enum Commands {
 
     /// Fetch from an ibundle
     Fetch(FetchArgs),
+
+    /// Show details of an ibundle
+    Show(ShowArgs),
 
     /// Report status
     Status(StatusArgs),
@@ -1562,6 +1572,57 @@ fn cmd_fetch(fetch_args: &FetchArgs) -> AResult<i32> {
     Ok(STATUS_OK)
 }
 
+fn yes_no(predicate: bool) -> String {
+    format!("{}", if predicate { "yes" } else { "no" })
+}
+
+fn show_orefs(orefs: &ORefs) {
+    if log_enabled!(Level::Debug) {
+        for (name, oid) in orefs {
+            log::debug!("{} {}", oid_to_bstring(oid).to_string(), quoted(name));
+        }
+        log::debug!(".");
+    }
+}
+
+fn show_commits(commits: &Commits) {
+    if log_enabled!(Level::Debug) {
+        for (oid, comment) in commits {
+            log::debug!(
+                "{} {}",
+                oid_to_bstring(oid).to_string(),
+                quoted(comment)
+            );
+        }
+        log::debug!(".");
+    }
+}
+
+fn cmd_show(show_args: &ShowArgs) -> AResult<i32> {
+    let ibundle_path = &show_args.ibundle_path;
+    let (ibundle, ibundle_reader) = read_ibundle(ibundle_path)?;
+    drop(ibundle_reader);
+    log::info!("standalone: {}", yes_no(ibundle.unchanged_orefs.is_some()));
+    log::info!("repo_id: {}", ibundle.repo_id);
+    log::info!("seq_num: {}", ibundle.seq_num);
+    log::info!("basis_seq_num: {}", ibundle.basis_seq_num);
+    log::info!("head_ref: {}", quoted(&ibundle.head_ref));
+    log::info!("head_detached: {}", yes_no(ibundle.head_detached));
+    log::info!("added_orefs: {}", ibundle.added_orefs.len());
+    show_orefs(&ibundle.added_orefs);
+    log::info!("removed_orefs: {}", ibundle.removed_orefs.len());
+    show_orefs(&ibundle.removed_orefs);
+    log::info!("moved_orefs: {}", ibundle.moved_orefs.len());
+    show_orefs(&ibundle.moved_orefs);
+    if let Some(unchanged_orefs) = &ibundle.unchanged_orefs {
+        log::info!("unchanged_orefs: {}", unchanged_orefs.len());
+        show_orefs(&unchanged_orefs);
+    }
+    log::info!("prereqs: {}", ibundle.prereqs.len());
+    show_commits(&ibundle.prereqs);
+    Ok(STATUS_OK)
+}
+
 fn cmd_status(status_args: &StatusArgs) -> AResult<i32> {
     drop(status_args);
     let repo_path = ".";
@@ -1661,6 +1722,7 @@ fn run() -> AResult<i32> {
     let exit_status = match &cli.command {
         Commands::Create(create_args) => cmd_create(create_args)?,
         Commands::Fetch(fetch_args) => cmd_fetch(fetch_args)?,
+        Commands::Show(show_args) => cmd_show(show_args)?,
         Commands::Status(status_args) => cmd_status(status_args)?,
         Commands::Clean(clean_args) => cmd_clean(clean_args)?,
     };

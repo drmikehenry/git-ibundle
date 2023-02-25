@@ -20,6 +20,8 @@
 
 - Remove `status --long` switch; use `status --verbose` instead.
 
+- Add `show` command to examine an ibundle file.
+
 ## Version 0.1.1
 
 - Force fetching via `git fetch --force` to allow non-fast-forward fetches (such

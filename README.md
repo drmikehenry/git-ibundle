@@ -278,6 +278,62 @@ to override this caution.  `--force` may be used in these cases:
   the `fetch` operation is safe to attempt; forcing will not override the
   requirement that all commit IDs be present.
 
+### Show details of an ibundle
+
+```text
+Usage: git-ibundle show [OPTIONS] <IBUNDLE_FILE>
+
+Arguments:
+  <IBUNDLE_FILE>  ibundle file to examine
+
+Options:
+  -h, --help        Print help information
+  -V, --version     Print version information
+  -v, --verbose...  More output per occurrence
+  -q, --quiet...    Less output per occurrence
+```
+
+For example:
+
+```console
+$ git-ibundle show file.ibundle
+standalone: no
+repo_id: d64e7f05-9e75-458d-8c3d-9e7380b6d5b5
+seq_num: 2
+basis_seq_num: 1
+head_ref: 'refs/heads/main'
+head_detached: no
+added_orefs: 1
+removed_orefs: 1
+moved_orefs: 2
+prereqs: 1
+```
+
+With `--verbose`, more details are shown:
+
+```console
+$ git-ibundle show --verbose file.ibundle
+standalone: no
+repo_id: d64e7f05-9e75-458d-8c3d-9e7380b6d5b5
+seq_num: 2
+basis_seq_num: 1
+head_ref: 'refs/heads/main'
+head_detached: no
+added_orefs: 1
+4575ca5a540085b2569d714fd449ba7a21b3ebf6 'refs/tags/tag2'
+.
+removed_orefs: 1
+29f7fecbb7c205a4185c59cf50c6ff0d5137979d 'refs/heads/branch1'
+.
+moved_orefs: 2
+4575ca5a540085b2569d714fd449ba7a21b3ebf6 'HEAD'
+4575ca5a540085b2569d714fd449ba7a21b3ebf6 'refs/heads/main'
+.
+prereqs: 1
+29f7fecbb7c205a4185c59cf50c6ff0d5137979d 'Initial commit.'
+.
+```
+
 ### Report status
 
 ```text
