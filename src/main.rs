@@ -3,7 +3,6 @@ use std::ffi;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path;
-use tempfile;
 use uuid;
 
 use anyhow::{anyhow, bail, Context};
@@ -189,6 +188,27 @@ fn oid_bstr_parse(bstr: &BStr) -> AResult<(git2::Oid, BString)> {
         Ok((parse_oid(oid_bstr)?, BString::from(rest_bstr)))
     } else {
         bail!("missing space in {}", bstr);
+    }
+}
+
+// Deletes `file_path` when `FileDeleter` is dropped.
+struct FileDeleter {
+    file_path: Option<path::PathBuf>,
+}
+
+impl FileDeleter {
+    fn new<P: AsRef<path::Path>>(file_path: P) -> Self {
+        Self {
+            file_path: Some(file_path.as_ref().to_path_buf()),
+        }
+    }
+}
+
+impl Drop for FileDeleter {
+    fn drop(&mut self) {
+        if let Some(file_path) = self.file_path.take() {
+            fs::remove_file(&file_path).ok();
+        }
     }
 }
 
@@ -707,19 +727,18 @@ fn repo_fetch(
     dry_run: bool,
 ) -> AResult<()> {
     let temp_dir_path = repo_mktemp(repo)?;
-    let mut bundle_tempfile = tempfile::Builder::new()
-        .prefix("temp")
-        .suffix(".bundle")
-        .tempfile_in(&temp_dir_path)?;
-    let mut bundle_file = bundle_tempfile.as_file_mut();
+    let bundle_path = temp_dir_path.join("temp.bundle");
+    let bundle_path_deleter = FileDeleter::new(&bundle_path);
+    let mut bundle_file = fs::File::create(&bundle_path)?;
 
     git_bundle_header_write(&mut bundle_file, prereqs, bundle_orefs)?;
-    io::copy(&mut pack_reader, bundle_file)?;
+    io::copy(&mut pack_reader, &mut bundle_file)?;
     drop(pack_reader);
     bundle_file.flush()?;
     drop(bundle_file);
 
-    git_fetch_bundle(&bundle_tempfile.path(), dry_run)?;
+    git_fetch_bundle(&bundle_path, dry_run)?;
+    drop(bundle_path_deleter);
 
     Ok(())
 }
@@ -1315,17 +1334,13 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
     };
 
     let temp_dir_path = repo_mktemp(&repo)?;
-    let bundle_tempfile = tempfile::Builder::new()
-        .prefix("temp")
-        .suffix(".bundle")
-        .tempfile_in(&temp_dir_path)?;
+    let bundle_path = temp_dir_path.join("temp.bundle");
+    let bundle_path_deleter = FileDeleter::new(&bundle_path);
 
-    let mut stdin_tempfile = tempfile::Builder::new()
-        .prefix("temp")
-        .suffix(".stdin")
-        .tempfile_in(&temp_dir_path)?;
+    let stdin_path = temp_dir_path.join("temp.stdin");
+    let stdin_path_deleter = FileDeleter::new(&stdin_path);
 
-    let mut stdin_file = stdin_tempfile.as_file_mut();
+    let mut stdin_file = fs::File::create(&stdin_path)?;
     for oid in excluded_oids.iter() {
         stdin_file.write_all(b"^")?;
         stdin_file.write_all(oid_to_bstring(oid).as_bstr())?;
@@ -1337,12 +1352,10 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
     stdin_file.flush()?;
     drop(stdin_file);
 
-    git_bundle_create_stdin(
-        &bundle_tempfile.path(),
-        open_file(stdin_tempfile.path())?,
-    )?;
+    git_bundle_create_stdin(&bundle_path, open_file(&stdin_path)?)?;
+    drop(stdin_path_deleter);
 
-    let mut bundle_reader = open_reader(&bundle_tempfile.path())?;
+    let mut bundle_reader = open_reader(&bundle_path)?;
     let (mut prereqs, packed_orefs) =
         git_bundle_header_read(&mut bundle_reader)?;
 
@@ -1369,6 +1382,7 @@ fn cmd_create(create_args: &CreateArgs) -> AResult<i32> {
     ibundle.write(&mut ibundle_writer, create_args.standalone)?;
     io::copy(&mut bundle_reader, &mut ibundle_writer)?;
     drop(bundle_reader);
+    drop(bundle_path_deleter);
     ibundle_writer.flush()?;
     drop(ibundle_writer);
 
