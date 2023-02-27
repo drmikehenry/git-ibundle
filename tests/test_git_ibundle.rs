@@ -185,6 +185,7 @@ fn must_git_commit_file(repo_path: &Path, commit_num: &mut usize) -> Assert {
         .open(&repo_path.join(file_name))
         .unwrap();
     write!(f, "data-{}\n", commit_num).unwrap();
+    drop(f);
     let mut msg = BString::from("Commit ");
     msg.extend(commit_num.to_string().into_bytes().into_iter());
     msg.push_str("\nSummary.\n\nMore\ncomments.\n");
