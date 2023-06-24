@@ -1,5 +1,11 @@
 # History
 
+## Version 0.2.1
+
+- Change incorrect Git minimum version specification in `README.md`.  Git
+  v2.31.0+ is required for proper operation.  Ref:
+  <https://github.com/drmikehenry/git-ibundle/issues/1>
+
 ## Version 0.2.0
 
 - Restructure ibundle format to V2 for better efficiency.  This bundle file

@@ -54,9 +54,9 @@ git-ibundle is licensed under the terms of the MIT license; see
 ## Requirements
 
 - `git-ibundle` executable
-- Git v2.25+ (with `git` on the `PATH`)
+- Git v2.31+ (with `git` on the `PATH`)
 
-Note: Git version 2.25 introduced the `git bundle create --progress` flag
+Note: Git version 2.31 introduced the `git bundle create --stdin` flag
 required by git-ibundle.
 
 Development and most testing is done on Linux; this is the best-supported
