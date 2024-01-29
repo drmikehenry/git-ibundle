@@ -1,5 +1,9 @@
 # History
 
+## Version 0.2.2
+
+- Fix warnings with new stable compiler (1.75.0).
+
 ## Version 0.2.1
 
 - Change incorrect Git minimum version specification in `README.md`.  Git

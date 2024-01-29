@@ -18,9 +18,9 @@ const STATUS_OK: i32 = 0;
 const STATUS_ERROR: i32 = 1;
 const STATUS_EMPTY_BUNDLE: i32 = 3;
 
-const IBUNDLE_FORMAT_V2: &[u8] = b"# v2 git ibundle";
-const REPO_META_FORMAT_V1: &[u8] = b"# v1 repo meta";
-const GIT_BUNDLE_FORMAT_V2: &[u8] = b"# v2 git bundle";
+const IBUNDLE_FORMAT_V2: &'static [u8] = b"# v2 git ibundle";
+const REPO_META_FORMAT_V1: &'static [u8] = b"# v1 repo meta";
+const GIT_BUNDLE_FORMAT_V2: &'static [u8] = b"# v2 git bundle";
 
 fn quoted<B: AsRef<BStr>>(s: B) -> String {
     let s = s.as_ref();
@@ -483,20 +483,20 @@ fn repo_remove_refs(
 
 struct Directive {}
 impl Directive {
-    const REPO_ID: &[u8] = b"repo_id";
-    const SEQ_NUM: &[u8] = b"seq_num";
-    const BASIS_SEQ_NUM: &[u8] = b"basis_seq_num";
-    const HEAD_REF: &[u8] = b"head_ref";
-    const HEAD_DETACHED: &[u8] = b"head_detached";
-    const OREFS: &[u8] = b"orefs";
-    const COMMITS: &[u8] = b"commits";
-    const PREREQS: &[u8] = b"prereqs";
-    const ADDED_PACKED_OREFS: &[u8] = b"added_packed_orefs";
-    const ADDED_NOT_PACKED_OREFS: &[u8] = b"added_not_packed_orefs";
-    const REMOVED_OREFS: &[u8] = b"removed_orefs";
-    const MOVED_PACKED_OREFS: &[u8] = b"moved_packed_orefs";
-    const MOVED_NOT_PACKED_OREFS: &[u8] = b"moved_not_packed_orefs";
-    const UNCHANGED_OREFS: &[u8] = b"unchanged_orefs";
+    const REPO_ID: &'static [u8] = b"repo_id";
+    const SEQ_NUM: &'static [u8] = b"seq_num";
+    const BASIS_SEQ_NUM: &'static [u8] = b"basis_seq_num";
+    const HEAD_REF: &'static [u8] = b"head_ref";
+    const HEAD_DETACHED: &'static [u8] = b"head_detached";
+    const OREFS: &'static [u8] = b"orefs";
+    const COMMITS: &'static [u8] = b"commits";
+    const PREREQS: &'static [u8] = b"prereqs";
+    const ADDED_PACKED_OREFS: &'static [u8] = b"added_packed_orefs";
+    const ADDED_NOT_PACKED_OREFS: &'static [u8] = b"added_not_packed_orefs";
+    const REMOVED_OREFS: &'static [u8] = b"removed_orefs";
+    const MOVED_PACKED_OREFS: &'static [u8] = b"moved_packed_orefs";
+    const MOVED_NOT_PACKED_OREFS: &'static [u8] = b"moved_not_packed_orefs";
+    const UNCHANGED_OREFS: &'static [u8] = b"unchanged_orefs";
 }
 
 fn write_directive<W: io::Write, D: AsRef<[u8]>, Rest: AsRef<[u8]>>(
@@ -1638,7 +1638,7 @@ fn cmd_show(show_args: &ShowArgs) -> AResult<i32> {
 }
 
 fn cmd_status(status_args: &StatusArgs) -> AResult<i32> {
-    drop(status_args);
+    let _ = status_args;
     let repo_path = ".";
     let repo = repo_open(repo_path)?;
     let mut failed = false;
