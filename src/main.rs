@@ -875,8 +875,21 @@ fn repo_meta_current(repo: &git2::Repository) -> AResult<RepoMeta> {
         meta.orefs.insert(BString::from("HEAD"), head_commit.id());
     }
     for (_name, &oid) in meta.orefs.iter() {
-        let (commit_id, comment) = repo_commit_id_comment(repo, oid)?;
-        meta.commits.insert(commit_id, comment);
+        // It's possible to have an `oref` that does not peel to a commit;
+        // for example, in the Linux kernel source tree, the tag `v2.6.11`
+        // refers to a tag object (5dc01c595e6c6ec9ccda4f6f69c131c0dd945f8c)
+        // which points directly to a tree object
+        // (5dc01c595e6c6ec9ccda4f6f69c131c0dd945f8c).  This is unusual but
+        // legal; for the tag `v2.6.11`, it was done because Git history does
+        // not exist for earlier kernel versions.  The tagged tree object
+        // provides a hook for future importation of this older source, and an
+        // anchor point for doing diffs.
+        //
+        // If the `oref` does not have an associated commit, there's nothing to
+        // track in `meta.commits`.
+        if let Ok((commit_id, comment)) = repo_commit_id_comment(repo, oid) {
+            meta.commits.insert(commit_id, comment);
+        }
     }
     Ok(meta)
 }

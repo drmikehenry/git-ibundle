@@ -2,6 +2,14 @@
 
 ## Version 0.2.2
 
+- Allow refs (tags, branches) that aren't commits.
+
+  Git itself permits tagging of arbitrary objects.  The Linux kernel source
+  currently has two instances of tag objects that point to a tree object instead
+  of a commit (tags `v2.6.11`, `v2.6.11-tree`).  When a ref lacks an associated
+  commit, there's no prerequisite to track, so there's no reason to fail with an
+  error in that case.
+
 - Fix warnings with new stable compiler (1.75.0).
 
 ## Version 0.2.1
